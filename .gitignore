@@ -25,3 +25,6 @@ private/
 
 # App data written at runtime
 *.npy
+# Python
+__pycache__/
+*.pyc

@@ -11,6 +11,13 @@
   </p>
 </p>
 
+> **This is a personal fork: the YuE2Mac Workstation.** It keeps the original app and adds
+> score editing, covers from any recording or a hummed melody (SheetSage2), takes, AI score edits,
+> stems, a lyrics check, a no-Xcode build and a command-line tool.
+> **Start with [docs/SETUP.md](docs/SETUP.md)** (installing on a new Mac) and
+> **[docs/PROJECT_NOTES.md](docs/PROJECT_NOTES.md)** (what was built, why, what's next).
+> The original README follows.
+
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README-ZH.md">中文文档</a>
 </p>
