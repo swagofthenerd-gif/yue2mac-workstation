@@ -61,6 +61,29 @@ def set_tempo(abc_text: str, bpm: int) -> str:
     return re.sub(r"^(K:.*)$", line + r"\n\1", abc_text, count=1, flags=re.MULTILINE)
 
 
+VOCAL_NOTE = re.compile(r"(?:\^\^|__|\^|_|=)?[A-Ga-g][,']*(\d*)-?")
+
+
+def silence_vocal(abc_text: str) -> str:
+    """Turn every sung note into a rest of the same length, keeping chord symbols.
+
+    Chords live in the Vocal voice as quoted symbols, so dropping the voice would
+    also drop the harmony. Rests can't be tied, so ties are removed with the note.
+    """
+    out, in_vocal = [], False
+    for line in abc_text.splitlines():
+        s = line.strip()
+        if s.startswith("V:"):
+            in_vocal = s[2:].strip().split()[0:1] == ["Vocal"] and "clef=" not in s
+        elif in_vocal and s and not re.match(r"^[A-Za-z]:|^%", s):
+            # Only rewrite text outside "chord" quotes and [K:...] fields.
+            parts = re.split(r'("[^"\n]*"|\[[A-Za-z]:[^\]\n]*\])', line)
+            line = "".join(p if i % 2 else VOCAL_NOTE.sub(lambda m: "z" + m.group(1), p)
+                           for i, p in enumerate(parts))
+        out.append(line)
+    return "\n".join(out) + ("\n" if abc_text.endswith("\n") else "")
+
+
 def score_seconds(abc_text: str):
     try:
         return abc_tools.report(abc_tools.parse_abc(abc_text))["nominal_duration_seconds"]
@@ -177,6 +200,17 @@ def cmd_generate(a):
     cot = a.cot
     notes = []
 
+    if a.instrumental:
+        # A style tag alone isn't enough: the plan still writes a Vocal melody and the
+        # model sings it. Instrumental needs a score whose Vocal voice is all rests.
+        if "no vocals" not in style.lower():
+            style = (style.rstrip(", ") + ", instrumental, no vocals").lstrip(", ")
+        tags = [l.strip() for l in lyrics.splitlines() if re.fullmatch(r"\[[^\]]+\]", l.strip())]
+        lyrics = "\n".join(tags) if tags else "[Intro]\n[Instrumental]\n[Outro]"
+        if cot in ("off", "auto"):
+            cot = "full"
+        notes.append("instrumental: vocal line silenced in the score, lyrics reduced to section tags")
+
     if abc_text is not None:
         if a.tempo:
             abc_text = set_tempo(abc_text, a.tempo)
@@ -205,7 +239,10 @@ def cmd_generate(a):
     if cot != "off":
         if abc_text is None:
             abc_ids, abc_text, plan_truncated = eng.plan(style, lyrics, cot, seeds[0], abc_s)
-        else:
+        if a.instrumental:
+            abc_text = silence_vocal(abc_text)
+            abc_ids = tok.encode(abc_text)
+        elif abc_ids == []:
             abc_ids = tok.encode(abc_text)
         (out / "score.abc").write_text(abc_text, encoding="utf-8")
     if a.auto_length and abc_text is not None:
@@ -231,7 +268,8 @@ def cmd_generate(a):
 
     record = {
         "request": {"style": style, "lyrics": lyrics, "cot": cot, "cot_requested": a.cot,
-                    "abc_supplied": a.abc_file is not None, "tempo": a.tempo},
+                    "abc_supplied": a.abc_file is not None, "tempo": a.tempo,
+                    "instrumental": a.instrumental},
         "settings": {"cfg_scale": a.cfg_scale, "steps": a.steps or eng.pipe.ode_steps,
                      "max_tokens": tokens, "auto_length": a.auto_length,
                      "semantic_sampling": asdict(sem_s), "plan_sampling": asdict(abc_s)},
@@ -326,6 +364,7 @@ def main():
     gen.add_argument("--tempo", type=int, help="rewrite the score's tempo (BPM); note lengths follow")
     gen.add_argument("--strip-chords", action="store_true", help="remove chord symbols from the score")
     gen.add_argument("--keep-voice", default="both", choices=("both", "Vocal", "Ins"))
+    gen.add_argument("--instrumental", action="store_true", help="no singing: silence the score's vocal line")
     gen.add_argument("--cfg-scale", type=float, help="text guidance; model default 1.0 (1.01 when planning is off)")
     gen.add_argument("--steps", type=int, help="refinement steps; model default 32")
     gen.add_argument("--max-tokens", type=int, help=f"song length cap, 25 per second, at most {HARD_TOKEN_CAP}")
