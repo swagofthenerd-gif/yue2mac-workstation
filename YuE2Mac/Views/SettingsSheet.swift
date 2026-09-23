@@ -9,6 +9,10 @@ struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var variant = SystemInfo.recommendedVariant
     @StateObject private var cover = CoverModeInstaller()
+    @StateObject private var sepInstall = ScriptInstaller()
+    @StateObject private var levoInstall = ScriptInstaller()
+    @StateObject private var sa3Install = ScriptInstaller()
+    @State private var hfToken = ""
 
     @ObservedObject private var settings = SettingsStore.shared
     private var theme: AppTheme { settings.theme }
@@ -72,6 +76,24 @@ struct SettingsSheet: View {
                 }
             }
 
+            GroupBox(label: Label("More models", systemImage: "square.stack.3d.up")) {
+                VStack(alignment: .leading, spacing: 10) {
+                    installRow("Stem separation (UVR5)", ok: Tools.separatorInstalled,
+                               detail: "BS-RoFormer + Demucs v4 for Stem Remix. About 1.5 GB.",
+                               installer: sepInstall) { Task { await sepInstall.run("setup_separator.sh") } }
+                    installRow("LeVo 2 (Tencent)", ok: Tools.levo2Installed,
+                               detail: "Second song generator. About 6.5 GB, builds on this Mac (a few minutes). Research / education use only.",
+                               installer: levoInstall) { Task { await levoInstall.run("setup_levo2.sh") } }
+                    installRow("Remix (Stable Audio 3)", ok: Tools.sa3Installed && Tools.sa3WeightsPresent,
+                               detail: "Restyle stems, regenerate parts, add layers. On huggingface.co accept the licenses for stabilityai/stable-audio-3-small-music and google/t5gemma-b-b-ul2, then paste a read token here.",
+                               installer: sa3Install) {
+                        Task { await sa3Install.run("setup_stable_audio3.sh", env: hfToken.isEmpty ? [:] : ["HF_LOGIN_TOKEN": hfToken]) }
+                    }
+                    SecureField("Hugging Face read token (only needed once, for Stable Audio 3)", text: $hfToken)
+                        .textFieldStyle(.roundedBorder).font(.caption)
+                }
+            }
+
             GroupBox(label: Label("Appearance", systemImage: "paintpalette")) {
                 Picker("Theme", selection: Binding(
                     get: { settings.theme },
@@ -95,8 +117,25 @@ struct SettingsSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 560)
+        .frame(width: 600)
         .onAppear { variant = settings.preferredVariant.isEmpty ? SystemInfo.recommendedVariant : settings.preferredVariant }
+    }
+
+    private func installRow(_ title: String, ok: Bool, detail: String, installer: ScriptInstaller,
+                            action: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Image(systemName: ok ? "checkmark.circle.fill" : "circle.dashed").foregroundStyle(ok ? .green : .secondary)
+                Text(title).font(.callout.weight(.semibold))
+                Spacer()
+                if installer.running { ProgressView().controlSize(.small) }
+                Button(ok ? "Reinstall" : "Install", action: action).disabled(installer.running).controlSize(.small)
+            }
+            Text(detail).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if !installer.status.isEmpty {
+                Text(installer.status).font(.caption2.monospaced()).foregroundStyle(installer.failed ? .red : .secondary).lineLimit(2)
+            }
+        }
     }
 
     private func textRow(_ label: String, _ value: String) -> some View {

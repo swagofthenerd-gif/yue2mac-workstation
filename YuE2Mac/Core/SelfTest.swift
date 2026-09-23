@@ -86,6 +86,36 @@ enum SelfTest {
             suite.removePersistentDomain(forName: "yue2mac.selftest")
             return finish(report, results)
         }
+        if mode == "stems" {
+            let st = StemSession()
+            st.mixer.masterVolume = 0
+            let args = CommandLine.arguments
+            guard let i = args.firstIndex(of: "--selftest"), i + 2 < args.count else { return finish(report, ["error": "need audio"]) }
+            st.open(URL(fileURLWithPath: args[i + 2]), bpmHint: 92)
+            let t0 = Date()
+            await st.split()
+            var r: [String: Any] = ["split_seconds": Int(Date().timeIntervalSince(t0)), "tracks": st.tracks.map(\.name),
+                                    "message": st.message ?? "", "mix_duration": st.mixer.duration]
+            st.mixer.play(); try? await Task.sleep(nanoseconds: 1_500_000_000)
+            r["mixer_position_after_1.5s"] = (st.mixer.currentSeconds * 10).rounded() / 10
+            st.mixer.seek(to: 20); try? await Task.sleep(nanoseconds: 500_000_000)
+            r["mixer_after_seek_20"] = (st.mixer.currentSeconds * 10).rounded() / 10
+            st.mixer.pause()
+            if let v = st.tracks.first?.name { st.toggleMute(v) }
+            st.setGain("drums", 0.5)
+            if let mix = await st.exportMix() {
+                r["mix_file"] = mix.lastPathComponent
+                let probe = await runCapture(Tools.ffmpeg ?? "ffmpeg", ["-v", "error", "-i", mix.path, "-f", "null", "-"])
+                r["mix_readable"] = probe.status == 0
+            }
+            if let dir = st.exportStems() { r["daw_stems"] = (try? FileManager.default.contentsOfDirectory(atPath: dir.path).sorted()) ?? [] }
+            st.prompt = "glitchy granular IDM textures"
+            await st.restyleTicked()
+            r["restyle_message"] = st.message ?? ""
+            results["stems"] = r
+            suite.removePersistentDomain(forName: "yue2mac.selftest")
+            return finish(report, results)
+        }
         if mode == "levo" {
             s.generator = "levo2"; s.maxTokens = 500; s.takes = 1; s.seed = "3"; s.livePlayback = true
             let t0 = Date()

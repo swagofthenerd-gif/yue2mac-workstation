@@ -12,10 +12,11 @@ struct GeneratorView: View {
     @ObservedObject var engine: GenerationEngine
     @ObservedObject private var settings = SettingsStore.shared
     @StateObject private var side = SideTasks()
+    @StateObject private var stems = StemSession()
     @State private var lyricsReport: LyricsReport?
 
     enum Canvas: String, CaseIterable, Identifiable {
-        case lyrics = "Lyrics & Style", score = "Score", cover = "Cover / Hum"
+        case lyrics = "Lyrics & Style", score = "Score", cover = "Cover / Hum", remix = "Stem Remix"
         var id: String { rawValue }
     }
 
@@ -121,6 +122,12 @@ struct GeneratorView: View {
                     case .score:
                         ScrollView {
                             ScoreCanvas(settings: settings, engine: engine, side: side, theme: theme, writeScore: { start(.scoreOnly) })
+                                .padding(.trailing, 8)
+                        }
+                    case .remix:
+                        ScrollView {
+                            StemRemixCanvas(session: stems, mixer: stems.mixer, theme: theme,
+                                            currentTake: engine.lastSong.flatMap { s in (selectedTake ?? s.takes.first).map { s.takeURL($0) } })
                                 .padding(.trailing, 8)
                         }
                     case .cover:

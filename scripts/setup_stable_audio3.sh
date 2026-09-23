@@ -15,7 +15,12 @@ mkdir -p "$B"
 cd "$B/src"
 UV_PROJECT_ENVIRONMENT="$B/venv" uv sync -q --python 3.12
 HF="$B/venv/bin/hf"
-"$HF" auth whoami >/dev/null 2>&1 || "$HF" auth login
+if [ -n "$HF_LOGIN_TOKEN" ]; then
+  "$HF" auth login --token "$HF_LOGIN_TOKEN" >/dev/null 2>&1 || { echo "That Hugging Face token was refused."; exit 1; }
+fi
+if ! "$HF" auth whoami >/dev/null 2>&1; then
+  if [ -t 0 ]; then "$HF" auth login; else echo "Log in to Hugging Face first (paste a read token in Settings)."; exit 1; fi
+fi
 MODEL="${SA3_MODEL:-small-music}"
 "$B/venv/bin/python" "$SCRIPT_DIR/../engine/remix.py" fetch --model "$MODEL" 2>&1 | grep -vE "flash_attn|No module named 'flash" | tail -2
 echo "✓ Stable Audio 3 ($MODEL) ready"

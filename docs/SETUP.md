@@ -63,7 +63,19 @@ In the app: **Settings (gear) → Install Cover Mode.** It needs an Apple Silico
 
 **AI score edits** use the Claude Code CLI (`~/.local/bin/claude`), signed in to your account.
 
-## 5. Command line
+## 5. More models (optional)
+
+All three can also be installed from the app: **Settings → More models**.
+
+| What | Script | Size | Notes |
+|---|---|---|---|
+| Stem separation (UVR5: BS-RoFormer + Demucs v4 ft) | `zsh scripts/setup_separator.sh` | ~1.5 GB | Needed for Stem Remix |
+| LeVo 2 (Tencent), second song generator | `zsh scripts/setup_levo2.sh` | ~6.5 GB | Builds the C++ port with our Metal patch; research/education use only |
+| Stable Audio 3 (Stability AI), Remix | `zsh scripts/setup_stable_audio3.sh` | ~2–5 GB | Gated: on huggingface.co accept **stabilityai/stable-audio-3-small-music** and **google/t5gemma-b-b-ul2**, then log in (the script asks, or paste a read token in Settings) |
+
+The scripts install `cmake`/`ninja` with uv when missing; no admin rights needed.
+
+## 6. Command line
 
 ```bash
 ln -sf ~/YuE2Mac/scripts/yue2mac ~/.local/bin/yue2mac
@@ -72,7 +84,7 @@ yue2mac song --style "indie pop, 100 BPM" --lyrics-file lyrics.txt --takes 2
 yue2mac cover song.mp3 --style "bossa nova, soft female vocal" --lyrics-file lyrics.txt
 ```
 
-## 6. Checking a build without clicking through it
+## 7. Checking a build without clicking through it
 
 ```bash
 B=build/YuE2Mac.app/Contents/MacOS/YuE2Mac
@@ -80,6 +92,10 @@ $B --selftest /tmp/quick.json some-clip.m4a                          # transcrib
 YUE2MAC_SELFTEST=cancel $B --selftest /tmp/cancel.json               # Stop button leaves nothing behind
 YUE2MAC_SELFTEST=full   $B --selftest /tmp/full.json                 # one normal-length song
 YUE2MAC_SELFTEST=tools YUE2MAC_SELFTEST_SONG="<a song folder>" $B --selftest /tmp/tools.json clip.m4a
+YUE2MAC_SELFTEST=live   $B --selftest /tmp/live.json                 # live playback timing
+YUE2MAC_SELFTEST=player YUE2MAC_SELFTEST_FILE=take.wav YUE2MAC_SELFTEST_LIVE_DIR=<song>/live $B --selftest /tmp/p.json
+YUE2MAC_SELFTEST=levo   $B --selftest /tmp/levo.json                 # LeVo 2: 20 s song + Stop
+YUE2MAC_SELFTEST=stems  $B --selftest /tmp/stems.json clip.wav       # Stem Remix: split, mixer, exports
 ```
 
 The self-test uses a separate settings suite, so it never touches your real settings. It can't see

@@ -121,6 +121,21 @@ loudness jumps than random moments in the same song. The listening verdict decid
 - Lyrics format: `[verse] line. line ; [chorus] … ; [outro-short]`; tags verse, chorus, bridge,
   intro/inst/outro-short|medium|long, silence. Style: free text, e.g. "female, pop, the bpm is 100".
 
+## Stem Remix (UVR5 + Stable Audio 3) — built 2026-09-23
+
+Workflow from a second agent, adjusted: song (any take, History or file) → **UVR5 pass 1**
+BS-RoFormer-Viperx-1297 (vocals out; best instrumental SDR) → **pass 2** Demucs v4 ft on the
+instrumental (drums/bass/other, or 6-stem with guitar/piano; SCNet isn't in audio-separator) →
+**Stable Audio 3** restyle of ticked stems (strength 0.2–1.0, default 0.6; bar-aligned equal chunks
+for >110 s on Small), region regenerate, new layer → **mixer** (synced AVAudioPlayerNodes, gain/
+mute/solo, version per stem) → export mix (ffmpeg amix normalize=0) or DAW stems (48 kHz, same length).
+
+- audio-separator peak-normalises by default → stems didn't sum to the song (12 dB). `stems.py`
+  runs un-normalised and least-squares re-fits gains: 81 dB / 28 dB reconstruction, bleed −73 dB.
+- Stable Audio 3 code auto-selects MPS and falls back from flash-attn, so Medium may run on Mac —
+  **untested: weights are gated** (needs the user's HF login + accepting SA3 and Gemma terms).
+- Artist names are unlikely to steer SA3 (trained on licensed data); the UI says to describe the sound.
+
 ## Other ideas not built yet
 
 - Re-decode a take with `YuE2-Vae-legacy` (needs an MLX port of that decoder).
