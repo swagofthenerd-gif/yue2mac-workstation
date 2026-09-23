@@ -75,6 +75,16 @@ struct ScoreCanvas: View {
                 Button("Clear") { settings.customABC = "" }.disabled(!settings.hasScore)
             }
             .controlSize(.small)
+            if !settings.stashedScore.isEmpty {
+                HStack {
+                    Image(systemName: "tray.and.arrow.down").foregroundStyle(.secondary)
+                    Text("Your previous score was set aside when you picked a new reference recording, so the recording's own melody is used.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Restore it") { settings.customABC = settings.stashedScore; settings.stashedScore = ""; settings.scoreSource = "manual" }
+                    Button("Discard") { settings.stashedScore = "" }
+                }
+                .controlSize(.small)
+            }
 
             Divider()
             aiRow
@@ -197,6 +207,7 @@ struct ScoreCanvas: View {
         panel.allowsOtherFileTypes = true
         if panel.runModal() == .OK, let url = panel.url, let text = try? String(contentsOf: url) {
             settings.customABC = text
+            settings.scoreSource = "manual"
         }
     }
 
@@ -271,11 +282,11 @@ struct CoverCanvas: View {
                 Toggle(isOn: $settings.isolateVocals) {
                     HStack(spacing: 4) {
                         Text("Isolate the vocal first")
-                        HelpButton(text: "Separates the singing from the band (Demucs) before transcribing, for a cleaner melody. Turn off for instrumentals or hums.")
+                        HelpButton(text: "Melody-only covers: separates the singing from the band (Demucs) before transcribing, for a cleaner melody. Not used with chords, which need the band.")
                     }
                 }
                 .toggleStyle(.switch)
-                .disabled(!SideTasks.toolsInstalled)
+                .disabled(!SideTasks.toolsInstalled || settings.coverChords)
                 HStack {
                     Button { transcribe() } label: { Label("Transcribe now", systemImage: "text.viewfinder") }
                         .disabled(!settings.hasReference || engine.isRunning || !Tools.coverModeInstalled)

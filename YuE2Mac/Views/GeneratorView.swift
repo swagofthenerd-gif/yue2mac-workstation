@@ -276,7 +276,13 @@ struct GeneratorView: View {
             HStack(spacing: 10) {
                 if song.takes.count > 1 {
                     Picker("", selection: Binding(get: { take }, set: { selectedTake = $0 })) {
-                        ForEach(Array(song.takes.enumerated()), id: \.element) { i, t in Text("Take \(i + 1)").tag(t) }
+                        ForEach(Array(song.takes.enumerated()), id: \.element) { i, t in
+                            if let m = song.melodyMatch[t.file] {
+                                Text("Take \(i + 1) · melody \(Int(m.coverage * 100))%").tag(t)
+                            } else {
+                                Text("Take \(i + 1)").tag(t)
+                            }
+                        }
                     }
                     .labelsHidden().fixedSize()
                 }
@@ -323,6 +329,11 @@ struct GeneratorView: View {
                 Button { NSWorkspace.shared.activateFileViewerSelecting([song.takeURL(take)]) } label: { Image(systemName: "folder") }
                     .help("Show in Finder")
                 Spacer()
+                if let m = song.melodyMatch[take.file] {
+                    Label("Melody match \(Int(m.coverage * 100))%", systemImage: "waveform.and.magnifyingglass")
+                        .font(.caption).foregroundStyle(m.coverage > 0.5 ? .green : .orange)
+                        .help(String(format: "The reference's melody is recognisably present in %.0f%% of this take, with %.0f%% pitch agreement there. For scale: two transcriptions of the same original agree about 40–45%%.", m.coverage * 100, m.match * 100))
+                }
                 if take.semantic_truncated {
                     Label("Hit length limit", systemImage: "scissors").font(.caption).foregroundStyle(.orange)
                         .help("Raise Max length or turn on Fit to score")

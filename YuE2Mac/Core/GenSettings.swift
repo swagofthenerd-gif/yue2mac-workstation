@@ -62,8 +62,22 @@ final class SettingsStore: ObservableObject {
     @Published var tempoBPM: Double { didSet { defaults.set(tempoBPM, forKey: "tempoBPM") } }
 
     // Cover mode — a reference recording transcribed by SheetSage2.
-    @Published var referenceAudio: String { didSet { defaults.set(referenceAudio, forKey: "referenceAudio") } }
-    @Published var coverChords: Bool { didSet { defaults.set(coverChords, forKey: "coverChords") } }
+    @Published var referenceAudio: String {
+        didSet {
+            defaults.set(referenceAudio, forKey: "referenceAudio")
+            // A score left over from something else would silently replace this recording's melody.
+            if referenceAudio != oldValue, !referenceAudio.isEmpty, hasScore,
+               scoreSource != "transcription:" + referenceAudio {
+                stashedScore = customABC
+                customABC = ""
+            }
+        }
+    }
+    @Published var coverChords: Bool { didSet { defaults.set(coverChords, forKey: "coverChordsV2") } }
+    /// Where the current score came from ("transcription:<audio path>", "plan", "edit" or "manual").
+    @Published var scoreSource: String { didSet { defaults.set(scoreSource, forKey: "scoreSource") } }
+    /// A score set aside when a new reference was chosen, so it can be restored.
+    @Published var stashedScore: String { didSet { defaults.set(stashedScore, forKey: "stashedScore") } }
     @Published var isolateVocals: Bool { didSet { defaults.set(isolateVocals, forKey: "isolateVocals") } }
 
     // AI score editing (Claude CLI).
@@ -117,8 +131,11 @@ final class SettingsStore: ObservableObject {
         tempoOverride = defaults.bool(forKey: "tempoOverride")
         tempoBPM = Self.number(defaults, "tempoBPM", 120)
         referenceAudio = defaults.string(forKey: "referenceAudio") ?? ""
-        coverChords = defaults.bool(forKey: "coverChords")
+        // Measured: keeping the original chords made covers far more recognisable (melody present in 62% vs 38%).
+        coverChords = defaults.object(forKey: "coverChordsV2") as? Bool ?? true
         isolateVocals = defaults.object(forKey: "isolateVocals") as? Bool ?? true
+        scoreSource = defaults.string(forKey: "scoreSource") ?? "manual"
+        stashedScore = defaults.string(forKey: "stashedScore") ?? ""
         aiInstruction = defaults.string(forKey: "aiInstruction") ?? ""
         aiContract = defaults.string(forKey: "aiContract") ?? AIContract.keepMelody.rawValue
         autoLength = defaults.object(forKey: "autoLength") as? Bool ?? true

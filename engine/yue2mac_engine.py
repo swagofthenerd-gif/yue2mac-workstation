@@ -173,6 +173,62 @@ def arrange(abc_text: str, order: list[int]) -> str:
     return text
 
 
+def melody_to_instrument(abc_text: str) -> str:
+    """Instrumental version that keeps the tune: the sung melody moves to the instrument voice.
+
+    Works bar by bar inside each group (both voices share the group's bar count): wherever the
+    Vocal bar has notes, the Ins bar becomes that melody (chord symbols stay in Vocal, which is
+    then silenced); elsewhere the original instrumental bar is kept. A tie that would cross into
+    a bar taken from the other voice is dropped, so the result stays valid.
+    """
+    lines = abc_text.splitlines()
+    out, i = [], 0
+    has_note = re.compile(r"(?<![\"A-Za-z])(?:\^\^|__|\^|_|=)?[A-Ga-g][,']*\d*")
+
+    def strip_quotes(bar):
+        return re.sub(r'"[^"\n]*"', "", bar)
+
+    while i < len(lines):
+        line = lines[i]
+        if line.strip() == "V: Vocal":
+            # Collect this group's Vocal block and the Ins block that follows it.
+            j = i + 1
+            vocal = []
+            while j < len(lines) and not lines[j].strip().startswith("V:") and not lines[j].strip().startswith("%"):
+                vocal.append(lines[j]); j += 1
+            if j < len(lines) and lines[j].strip() == "V: Ins":
+                k = j + 1
+                ins = []
+                while k < len(lines) and not lines[k].strip().startswith("V:") and not lines[k].strip().startswith("%"):
+                    ins.append(lines[k]); k += 1
+                v_fields = [l for l in vocal if re.match(r"^[A-Za-z]:", l.strip())]
+                i_fields = [l for l in ins if re.match(r"^[A-Za-z]:", l.strip())]
+                v_music = "".join(l for l in vocal if l.strip() and not re.match(r"^[A-Za-z]:", l.strip()))
+                i_music = "".join(l for l in ins if l.strip() and not re.match(r"^[A-Za-z]:", l.strip()))
+                # `Z4` is four whole-bar rests in one token; expand so bars line up one-to-one.
+                expand = lambda m: "|".join(["Z"] * int(m.group(1) or 1))
+                v_bars = [b for b in re.sub(r"Z(\d*)", expand, v_music).split("|") if b.strip()]
+                i_bars = [b for b in re.sub(r"Z(\d*)", expand, i_music).split("|") if b.strip()]
+                if len(v_bars) == len(i_bars) and v_bars:
+                    new_ins = []
+                    for vb, ib in zip(v_bars, i_bars):
+                        tune = strip_quotes(vb)
+                        new_ins.append(tune if has_note.search(tune) else ib)
+                    # A tie may only continue into a bar from the same source.
+                    for n in range(len(new_ins)):
+                        nxt_same = n + 1 < len(new_ins) and (
+                            (new_ins[n] is not i_bars[n]) == (new_ins[n + 1] is not i_bars[n + 1]))
+                        if new_ins[n].rstrip().endswith("-") and not nxt_same:
+                            new_ins[n] = new_ins[n].rstrip()[:-1]
+                    out += ["V: Vocal"] + vocal + ["V: Ins"] + i_fields + ["|".join(new_ins) + "|"]
+                    i = k
+                    continue
+        out.append(line)
+        i += 1
+    text = "\n".join(out) + "\n"
+    return silence_vocal(text)
+
+
 def score_seconds(abc_text: str):
     try:
         return abc_tools.report(abc_tools.parse_abc(abc_text))["nominal_duration_seconds"]
@@ -399,7 +455,7 @@ def cmd_generate(a):
         lyrics = "\n".join(tags) if tags else "[Intro]\n[Instrumental]\n[Outro]"
         if cot in ("off", "auto"):
             cot = "full"
-        notes.append("instrumental: vocal line silenced in the score, lyrics reduced to section tags")
+        notes.append("instrumental: no singing, lyrics reduced to section tags")
 
     if abc_text is not None:
         if a.tempo:
@@ -408,6 +464,11 @@ def cmd_generate(a):
         if a.keep_voice != "both" or a.strip_chords:
             abc_text = abc_tools.strip_chords(abc_text, keep_voice=a.keep_voice)
             notes.append("chords removed" + (f", kept only {a.keep_voice}" if a.keep_voice != "both" else ""))
+        chk = check_score(abc_text)
+        if chk.get("ok") and chk.get("bpm") and "bpm" not in style.lower():
+            # The official guidance: state the score's tempo in the style too.
+            style = style.rstrip(", ") + f", {chk['bpm']} BPM"
+            notes.append(f"added the score's tempo ({chk['bpm']} BPM) to the style")
         if cot == "auto":
             cot = "full" if has_chords(abc_text) else "melody"
             notes.append(f"planning set to {cot} ({'score has chords' if cot == 'full' else 'melody-only score'})")
@@ -430,7 +491,18 @@ def cmd_generate(a):
         if abc_text is None:
             abc_ids, abc_text, plan_truncated = eng.plan(style, lyrics, cot, seeds[0], abc_s)
         if a.instrumental:
-            abc_text = silence_vocal(abc_text)
+            if a.abc_file is not None:
+                # A supplied score (a cover or your own) is the song: keep its tune on an instrument.
+                try:
+                    moved = melody_to_instrument(abc_text)
+                    abc_tools.parse_abc(moved)
+                    abc_text = moved
+                    notes.append("instrumental: the sung melody is played by the instrument instead")
+                except Exception as exc:
+                    abc_text = silence_vocal(abc_text)
+                    notes.append(f"instrumental: couldn't move the melody to the instrument ({exc}); vocal line silenced")
+            else:
+                abc_text = silence_vocal(abc_text)
             abc_ids = tok.encode(abc_text)
         elif abc_ids == []:
             abc_ids = tok.encode(abc_text)

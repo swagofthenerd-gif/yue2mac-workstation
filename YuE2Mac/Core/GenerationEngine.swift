@@ -82,6 +82,7 @@ final class GenerationEngine: ObservableObject {
             if wantsTranscription {
                 guard let abc = await transcribe(settings: settings) else { return finishFailed() }
                 settings.customABC = abc
+                settings.scoreSource = "transcription:" + settings.referenceAudio
                 if job == .transcribeOnly { return finishOK() }
             }
             if job == .scoreOnly {
@@ -89,6 +90,7 @@ final class GenerationEngine: ObservableObject {
                     return finishFailed()
                 }
                 settings.customABC = abc
+                settings.scoreSource = "plan"
                 return finishOK()
             }
             if job == .song {
@@ -140,7 +142,8 @@ final class GenerationEngine: ObservableObject {
         }
         phase = .transcribing
         var source = settings.referenceAudio
-        if settings.isolateVocals && SideTasks.toolsInstalled {
+        // Chords need the band, so only melody-only transcriptions use the isolated vocal.
+        if settings.isolateVocals && !settings.coverChords && SideTasks.toolsInstalled {
             // A full mix confuses melody transcription; the isolated vocal is cleaner.
             progressMessage = "Isolating the vocal (Demucs)…"
             progress = nil
@@ -234,7 +237,43 @@ final class GenerationEngine: ObservableObject {
             // Keep the cover's source transcription (MIDI, chords, beats) with the song.
             try? fm.copyItem(at: t, to: folder.appendingPathComponent("transcription"))
         }
-        return song
+        if settings.scoreSource.hasPrefix("transcription:"), SideTasks.toolsInstalled, !userCancelled {
+            await measureMelodyMatch(song: song, reference: settings.customABC)
+        }
+        return SongEntry.load(folder) ?? song
+    }
+
+    /// Transcribe each take and score how closely its melody follows the reference.
+    @MainActor
+    private func measureMelodyMatch(song: SongEntry, reference: String) async {
+        let fm = FileManager.default
+        let ref = song.folder.appendingPathComponent("reference.abc")
+        try? reference.write(to: ref, atomically: true, encoding: .utf8)
+        var results: [String: [String: Double]] = [:]
+        for (i, take) in song.takes.enumerated() {
+            if userCancelled { return }
+            phase = .decoding
+            progress = nil
+            progressMessage = "Checking how closely take \(i + 1) follows the reference melody…"
+            let tx = song.folder.appendingPathComponent("match-\(take.file)")
+            let t = await runCapture(Tools.sheetSagePython, [Tools.transcribeScript, song.takeURL(take).path,
+                                                              "--models", Tools.sheetSageModels, "--output", tx.path,
+                                                              "--ffmpeg", Tools.ffmpeg ?? "ffmpeg"])
+            guard t.status == 0 else { continue }
+            let m = await runCapture(AppPaths.pythonBin.path, [Tools.engineDir.appendingPathComponent("melody_match.py").path,
+                                                                ref.path, tx.appendingPathComponent("score.abc").path])
+            if let data = m.out.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Double] {
+                results[take.file] = obj
+            }
+            try? fm.removeItem(at: tx)
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: results, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: song.folder.appendingPathComponent("melody-match.json"))
+        }
+        if let best = results.max(by: { ($0.value["coverage"] ?? 0) * ($0.value["match"] ?? 0) < ($1.value["coverage"] ?? 0) * ($1.value["match"] ?? 0) }) {
+            notes.append(String(format: "Melody match: best is %@ — reference melody present in %.0f%% of it", best.key, (best.value["coverage"] ?? 0) * 100))
+        }
     }
 
     private func planSampling(_ s: SettingsStore) -> [String] {

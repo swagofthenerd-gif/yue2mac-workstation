@@ -108,6 +108,8 @@ struct SongEntry: Identifiable, Hashable {
     let style: String
     let takes: [TakeRecord]
     let hasScore: Bool
+    /// take file -> (match, coverage), when the song is a cover and was checked.
+    var melodyMatch: [String: (match: Double, coverage: Double)] = [:]
     var id: URL { folder }
     var scoreURL: URL { folder.appendingPathComponent("score.abc") }
     func takeURL(_ t: TakeRecord) -> URL { folder.appendingPathComponent(t.file) }
@@ -120,9 +122,14 @@ struct SongEntry: Identifiable, Hashable {
         guard let data = try? Data(contentsOf: json),
               let rec = try? JSONDecoder().decode(SongRecord.self, from: data) else { return nil }
         let date = (try? json.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-        return SongEntry(folder: folder, date: date, title: folder.lastPathComponent,
-                         style: rec.request.style, takes: rec.takes,
-                         hasScore: FileManager.default.fileExists(atPath: folder.appendingPathComponent("score.abc").path))
+        var entry = SongEntry(folder: folder, date: date, title: folder.lastPathComponent,
+                              style: rec.request.style, takes: rec.takes,
+                              hasScore: FileManager.default.fileExists(atPath: folder.appendingPathComponent("score.abc").path))
+        if let m = try? Data(contentsOf: folder.appendingPathComponent("melody-match.json")),
+           let obj = try? JSONSerialization.jsonObject(with: m) as? [String: [String: Double]] {
+            for (file, v) in obj { entry.melodyMatch[file] = (v["match"] ?? 0, v["coverage"] ?? 0) }
+        }
+        return entry
     }
 
     /// Every song folder under Output, newest first.
