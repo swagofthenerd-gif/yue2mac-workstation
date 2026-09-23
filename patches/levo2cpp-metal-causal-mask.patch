@@ -1,0 +1,72 @@
+diff --git a/src/levo-kv.cpp b/src/levo-kv.cpp
+index 3dcb5ff..72d4e75 100644
+--- a/src/levo-kv.cpp
++++ b/src/levo-kv.cpp
+@@ -16,6 +16,20 @@
+ #include <utility>
+ #include <vector>
+ 
++// Metal in this ggml has no DIAG_MASK_INF, so causal masks are built from ops every
++// backend supports and passed to soft_max_ext. Masked scores get -1e30 (exp -> 0).
++static ggml_tensor * levo_causal_mask(ggml_context * context, ggml_tensor * scores, int64_t past) {
++    const int64_t keys = scores->ne[0];
++    const int64_t queries = scores->ne[1];
++    ggml_tensor * cols = ggml_reshape_2d(context, ggml_arange(context, 0.0F, static_cast<float>(keys), 1.0F), keys, 1);
++    ggml_tensor * rows = ggml_reshape_2d(context,
++        ggml_arange(context, static_cast<float>(past), static_cast<float>(past + queries), 1.0F), 1, queries);
++    ggml_tensor * shape = ggml_view_2d(context, scores, keys, queries, scores->nb[1], 0);
++    ggml_tensor * diff = ggml_sub(context, ggml_repeat(context, cols, shape), rows);  // key - (past + query)
++    ggml_tensor * future = ggml_step(context, ggml_scale_bias(context, diff, 1.0F, -0.5F));
++    return ggml_scale(context, future, -1.0e30F);
++}
++
+ namespace levo::detail {
+ namespace {
+ 
+@@ -425,8 +439,8 @@ ggml_tensor * cached_llama_tower(ggml_context * context, ggml_cgraph * graph,
+             capture_last_heads(context, first_layer_ops, "attention_scores", attention, token_count,
+                                emulate_fp16_activations);
+         }
+-        attention = ggml_diag_mask_inf(context, attention, past);
+-        attention = ggml_soft_max_ext(context, attention, nullptr,
++        ggml_tensor * causal_mask = levo_causal_mask(context, attention, past);
++        attention = ggml_soft_max_ext(context, attention, causal_mask,
+                                       emulate_fp16_activations ? 1.0F
+                                                                : 1.0F / std::sqrt(static_cast<float>(head_dimension)),
+                                       0.0F);
+diff --git a/src/levo-lm.cpp b/src/levo-lm.cpp
+index eef66ec..5787d84 100644
+--- a/src/levo-lm.cpp
++++ b/src/levo-lm.cpp
+@@ -14,6 +14,20 @@
+ #include <string>
+ #include <utility>
+ 
++// Metal in this ggml has no DIAG_MASK_INF, so causal masks are built from ops every
++// backend supports and passed to soft_max_ext. Masked scores get -1e30 (exp -> 0).
++static ggml_tensor * levo_causal_mask(ggml_context * context, ggml_tensor * scores, int64_t past) {
++    const int64_t keys = scores->ne[0];
++    const int64_t queries = scores->ne[1];
++    ggml_tensor * cols = ggml_reshape_2d(context, ggml_arange(context, 0.0F, static_cast<float>(keys), 1.0F), keys, 1);
++    ggml_tensor * rows = ggml_reshape_2d(context,
++        ggml_arange(context, static_cast<float>(past), static_cast<float>(past + queries), 1.0F), 1, queries);
++    ggml_tensor * shape = ggml_view_2d(context, scores, keys, queries, scores->nb[1], 0);
++    ggml_tensor * diff = ggml_sub(context, ggml_repeat(context, cols, shape), rows);  // key - (past + query)
++    ggml_tensor * future = ggml_step(context, ggml_scale_bias(context, diff, 1.0F, -0.5F));
++    return ggml_scale(context, future, -1.0e30F);
++}
++
+ namespace levo::detail {
+ namespace {
+ 
+@@ -182,8 +196,8 @@ ggml_tensor * llama_tower(ggml_context * context, ggml_tensor * input, ggml_tens
+         q = ggml_permute(context, q, 0, 2, 1, 3); // [head_dim, tokens, heads]
+         k = ggml_permute(context, k, 0, 2, 1, 3); // [head_dim, tokens, heads]
+         ggml_tensor * attention = ggml_mul_mat(context, k, q); // [keys, queries, heads]
+-        attention = ggml_diag_mask_inf(context, attention, 0);
+-        attention = ggml_soft_max_ext(context, attention, nullptr,
++        ggml_tensor * causal_mask = levo_causal_mask(context, attention, 0);
++        attention = ggml_soft_max_ext(context, attention, causal_mask,
+                                       1.0F / std::sqrt(static_cast<float>(head_dimension)), 0.0F);
+ 
+         ggml_tensor * value = ggml_cont_3d(

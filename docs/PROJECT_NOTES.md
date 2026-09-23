@@ -104,6 +104,23 @@ loudness jumps than random moments in the same song. The listening verdict decid
 - joins audible → longer overlaps / smarter crossfades first.
 
 
+## LeVo 2 (Tencent SongGeneration 2) — feasibility test, 2026-09-23
+
+- Runs on Apple Silicon via the community C++/GGML port `ckadirt/LeVo2.cpp` (pinned in
+  `scripts/setup_levo2.sh`) **with our patch** `patches/levo2cpp-metal-causal-mask.patch`: that ggml
+  build has no `DIAG_MASK_INF` on Metal (GPU aborts), so the causal mask is built from
+  arange/sub/step and passed to `soft_max_ext`. First tokens match CPU exactly; later greedy tokens
+  diverge from GPU/CPU rounding (normal). The port's 29 tests pass.
+- CPU only: 10 s of music took 281 s (unusable). GPU (large, Q8_0): 30 s song = ~23 s load +
+  ~75 s composing (~14 steps/s; real time needs ~33) + ~52 s render → ~5× slower than real time,
+  so a 3-min song ≈ 10 min. Too slow for live playback.
+- Lyrics: 24 of 27 words sung correctly on the test (YuE2's comparable test: 4 of 11).
+- **No reference-audio prompt in this port** (prompt audio is always the null/empty prompt), so it
+  doesn't help covers get closer to a recording.
+- License: research, academic, education only — no commercial use.
+- Lyrics format: `[verse] line. line ; [chorus] … ; [outro-short]`; tags verse, chorus, bridge,
+  intro/inst/outro-short|medium|long, silence. Style: free text, e.g. "female, pop, the bpm is 100".
+
 ## Other ideas not built yet
 
 - Re-decode a take with `YuE2-Vae-legacy` (needs an MLX port of that decoder).
