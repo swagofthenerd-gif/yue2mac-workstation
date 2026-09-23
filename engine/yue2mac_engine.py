@@ -84,6 +84,95 @@ def silence_vocal(abc_text: str) -> str:
     return "\n".join(out) + ("\n" if abc_text.endswith("\n") else "")
 
 
+FIELD = re.compile(r"^([MK]):\s*(.*)$")
+
+
+def split_sections(abc_text: str):
+    """Header lines + sections, each opened by a `% name` comment in the native format.
+
+    Every section records the meter/key in force when it starts, so it can be moved
+    without inheriting the wrong key from its new neighbour.
+    """
+    lines = abc_text.splitlines()
+    k_line = next((i for i, l in enumerate(lines) if l.startswith("K:")), None)
+    if k_line is None:
+        raise ValueError("Score has no K: (key) line")
+    header, body = lines[:k_line + 1], lines[k_line + 1:]
+    state = {"M": next((l[2:].strip() for l in header if l.startswith("M:")), "4/4"),
+             "K": lines[k_line][2:].strip()}
+    sections, current = [], None
+    for line in body:
+        st = line.strip()
+        if st.startswith("%"):
+            current = {"name": st.lstrip("% ").strip() or "section", "lines": [], "start": dict(state)}
+            sections.append(current)
+            continue
+        if current is None:  # music before any section comment
+            current = {"name": "start", "lines": [], "start": dict(state)}
+            sections.append(current)
+        m = FIELD.match(st)
+        if m:
+            state[m.group(1)] = m.group(2).strip()
+        current["lines"].append(line)
+    return header, sections
+
+
+def section_list(abc_text: str):
+    header, sections = split_sections(abc_text)
+    out = []
+    for i, sec in enumerate(sections):
+        mini = "\n".join(retarget(header, sec)) + "\n"
+        out.append({"index": i, "name": sec["name"], "seconds": score_seconds(mini)})
+    return out
+
+
+def retarget(header, sec):
+    """A header whose meter/key match the section's own starting state."""
+    h = []
+    for l in header:
+        if l.startswith("M:"):
+            l = "M:" + sec["start"]["M"]
+        elif l.startswith("K:"):
+            l = "K:" + sec["start"]["K"]
+        h.append(l)
+    return h + ["% " + sec["name"]] + sec["lines"]
+
+
+def arrange(abc_text: str, order: list[int]) -> str:
+    """Rebuild the score with sections in `order` (repeats and omissions allowed)."""
+    header, sections = split_sections(abc_text)
+    if not order:
+        raise ValueError("Keep at least one section")
+    for i in order:
+        if not 0 <= i < len(sections):
+            raise ValueError(f"No section {i}; the score has {len(sections)}")
+    first = sections[order[0]]["start"]
+    out = [l for l in retarget(header, sections[order[0]])[:len(header)]]
+    state = dict(first)
+    for i in order:
+        sec = sections[i]
+        out.append("% " + sec["name"])
+        need = {k: v for k, v in sec["start"].items() if state.get(k) != v}
+        injected = set()
+        for line in sec["lines"]:
+            out.append(line)
+            st = line.strip()
+            if need and st.startswith("V:"):
+                voice = st[2:].strip().split()[0]
+                if voice not in injected:
+                    # Both voice blocks must change meter/key at the same time.
+                    out += [f"{k}:{v}" for k, v in need.items()]
+                    injected.add(voice)
+        state = dict(sec["start"])
+        for line in sec["lines"]:
+            m = FIELD.match(line.strip())
+            if m:
+                state[m.group(1)] = m.group(2).strip()
+    text = "\n".join(out) + "\n"
+    abc_tools.parse_abc(text)  # raises if the rebuilt score isn't valid native ABC
+    return text
+
+
 def score_seconds(abc_text: str):
     try:
         return abc_tools.report(abc_tools.parse_abc(abc_text))["nominal_duration_seconds"]
@@ -326,6 +415,12 @@ def cmd_abc(a):
     elif a.action == "fit-length":
         tokens, why = fit_tokens(text, a.fallback)
         print(json.dumps({"tokens": tokens, "note": why}))
+    elif a.action == "sections":
+        print(json.dumps(section_list(text)))
+    elif a.action == "arrange":
+        order = [int(x) for x in a.order.split(",") if x.strip()]
+        a.output.write_text(arrange(text, order), encoding="utf-8")
+        print(json.dumps({"file": str(a.output), "check": check_score(a.output.read_text(encoding="utf-8"))}))
     elif a.action == "compare":
         before = abc_tools.parse_abc(a.other.read_text(encoding="utf-8"))
         after = abc_tools.parse_abc(text)
@@ -383,7 +478,7 @@ def main():
     dec.add_argument("--out", type=Path, required=True)
 
     ab = sub.add_parser("abc")
-    ab.add_argument("action", choices=("check", "inspect", "set-tempo", "strip-chords", "fit-length", "compare"))
+    ab.add_argument("action", choices=("check", "inspect", "set-tempo", "strip-chords", "fit-length", "compare", "sections", "arrange"))
     ab.add_argument("score", type=Path)
     ab.add_argument("--output", type=Path)
     ab.add_argument("--bpm", type=int)
@@ -391,6 +486,7 @@ def main():
     ab.add_argument("--fallback", type=int, default=4500)
     ab.add_argument("--other", type=Path, help="compare: the original score")
     ab.add_argument("--allow-tempo-change", action="store_true")
+    ab.add_argument("--order", default="", help="arrange: comma-separated section indexes, e.g. 0,1,2,1,3")
 
     a = ap.parse_args()
     if a.cmd in ("generate", "plan", "decode") and (a.scripts is None or a.model is None):
