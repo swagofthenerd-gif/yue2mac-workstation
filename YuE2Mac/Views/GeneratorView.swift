@@ -11,6 +11,8 @@ struct GeneratorView: View {
     @ObservedObject var setup: SetupManager
     @ObservedObject var engine: GenerationEngine
     @ObservedObject private var settings = SettingsStore.shared
+    @StateObject private var side = SideTasks()
+    @State private var lyricsReport: LyricsReport?
 
     enum Canvas: String, CaseIterable, Identifiable {
         case lyrics = "Lyrics & Style", score = "Score", cover = "Cover / Hum"
@@ -71,6 +73,9 @@ struct GeneratorView: View {
             HistorySheet(settings: settings) { scoreURL in reuseScore(scoreURL) }
         }
         .sheet(isPresented: $showLog) { logSheet }
+        .sheet(item: Binding(get: { lyricsReport.map(LyricsReportBox.init) }, set: { lyricsReport = $0?.report })) { box in
+            LyricsReportSheet(report: box.report)
+        }
         .onChange(of: engine.lastSong) { song in selectedTake = song?.takes.first }
         .onChange(of: engine.phase) { phase in
             // A finished score-only job or transcription lands in the Score tab for review.
@@ -88,7 +93,7 @@ struct GeneratorView: View {
             }
             .pickerStyle(.segmented).labelsHidden()
 
-            CardContainer(theme: theme) {
+            TopCard {
                 Group {
                     switch canvas {
                     case .lyrics:
@@ -99,10 +104,16 @@ struct GeneratorView: View {
                             lyricsEditor
                         }
                     case .score:
-                        ScoreCanvas(settings: settings, engine: engine, theme: theme, writeScore: { start(.scoreOnly) })
+                        ScrollView {
+                            ScoreCanvas(settings: settings, engine: engine, side: side, theme: theme, writeScore: { start(.scoreOnly) })
+                                .padding(.trailing, 8)
+                        }
                     case .cover:
-                        CoverCanvas(settings: settings, engine: engine, theme: theme,
-                                    transcribe: { start(.transcribeOnly) }, showScore: { canvas = .score })
+                        ScrollView {
+                            CoverCanvas(settings: settings, engine: engine, theme: theme,
+                                        transcribe: { start(.transcribeOnly) }, showScore: { canvas = .score })
+                                .padding(.trailing, 8)
+                        }
                     }
                 }
                 .padding(12)
@@ -207,7 +218,7 @@ struct GeneratorView: View {
 
     /// Status while working; player, takes and actions once a song is ready.
     private var resultPanel: some View {
-        CardContainer(theme: theme) {
+        TopCard {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     ZStack {
@@ -254,7 +265,7 @@ struct GeneratorView: View {
             }
             .padding(12)
         }
-        .frame(height: 176)
+        .frame(height: 186)
     }
 
     @ViewBuilder
@@ -282,6 +293,13 @@ struct GeneratorView: View {
                     ForEach(ExportFormat.allCases) { f in
                         Button(f.title) { export(song.takeURL(take), f) }
                     }
+                    Divider()
+                    Button("Split into stems (vocals, drums, bass, other)") {
+                        Task {
+                            if let dir = await side.stems(of: song.takeURL(take)) { NSWorkspace.shared.open(dir) }
+                        }
+                    }
+                    .disabled(side.busy != nil)
                     if FileManager.default.fileExists(atPath: song.folder.appendingPathComponent("transcription").path) {
                         Divider()
                         Button("Transcription MIDI files") {
@@ -290,6 +308,9 @@ struct GeneratorView: View {
                     }
                 } label: { Label("Export", systemImage: "square.and.arrow.up") }
                 .fixedSize()
+                Button { checkLyrics(song, take) } label: { Label("Check lyrics", systemImage: "text.badge.checkmark") }
+                    .disabled(side.busy != nil || songIsInstrumental(song))
+                    .help("Transcribe what was actually sung and compare it with your lyrics")
                 Button { NSWorkspace.shared.activateFileViewerSelecting([song.takeURL(take)]) } label: { Image(systemName: "folder") }
                     .help("Show in Finder")
                 Spacer()
@@ -299,7 +320,11 @@ struct GeneratorView: View {
                 }
             }
             .controlSize(.small)
-            if let m = exportMessage { Text(m).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+            if let busy = side.busy {
+                HStack(spacing: 6) { ProgressView().controlSize(.small); Text(busy).font(.caption).foregroundStyle(.secondary) }
+            } else if let m = side.message ?? exportMessage {
+                Text(m).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
         }
     }
 
@@ -621,6 +646,22 @@ struct GeneratorView: View {
         if autoGenerate { start(.song) }
     }
 
+    private func songIsInstrumental(_ song: SongEntry) -> Bool {
+        guard let data = try? Data(contentsOf: song.folder.appendingPathComponent("song.json")),
+              let rec = try? JSONDecoder().decode(SongRecord.self, from: data) else { return false }
+        return rec.request.instrumental == true
+    }
+
+    private func checkLyrics(_ song: SongEntry, _ take: TakeRecord) {
+        guard let data = try? Data(contentsOf: song.folder.appendingPathComponent("song.json")),
+              let rec = try? JSONDecoder().decode(SongRecord.self, from: data) else { return }
+        Task {
+            if let r = await side.lyricsCheck(take: song.takeURL(take), lyrics: rec.request.lyrics) {
+                lyricsReport = r
+            }
+        }
+    }
+
     private func export(_ take: URL, _ format: ExportFormat) {
         exportMessage = "Exporting…"
         let master = settings.masterLoudness
@@ -724,6 +765,20 @@ private func labeledSlider(_ title: String,
 
 private func formatValue(_ v: Double, whole: Bool) -> String {
     whole ? "\(Int(v))" : String(format: "%.1f", v)
+}
+
+/// A fixed-size card whose content starts at the top and is clipped to the card.
+/// (CardContainer centres an overlay, so tall content spills out of the top unseen.)
+struct TopCard<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color(red: 0.09, green: 0.09, blue: 0.10)))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08), lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
 }
 
 /// A card that sizes to its content (safe inside a ScrollView, unlike CardContainer).

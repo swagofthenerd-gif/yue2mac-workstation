@@ -61,9 +61,17 @@ final class CoverModeInstaller: ObservableObject {
         _ = try? await Shell.run(executable: pip, arguments: ["install", "-q", "--upgrade", "pip"])
         let pins = ["torch==2.8.0", "torchaudio==2.8.0", "transformers==4.45.2", "huggingface-hub==0.36.0",
                     "safetensors==0.5.3", "numpy==1.24.3", "scipy==1.13.1", "mir_eval==0.8.2",
-                    "pretty_midi==0.2.10", "mido==1.3.3", "setuptools==78.1.1"]
+                    "pretty_midi==0.2.10", "mido==1.3.3", "setuptools==78.1.1", "soundfile"]
         guard (try? await Shell.run(executable: pip, arguments: ["install", "-q"] + pins)) == 0 else {
             return fail("Installing the libraries failed. Check your connection and retry.")
+        }
+        // Stems / vocal isolation (Demucs) and the lyrics check (Whisper on MLX), held to the pins above.
+        status = "Installing stem splitting and lyrics recognition…"
+        let constraints = dir.appendingPathComponent("constraints.txt")
+        try? pins.prefix(7).joined(separator: "\n").write(to: constraints, atomically: true, encoding: .utf8)
+        guard (try? await Shell.run(executable: pip, arguments: ["install", "-q", "-c", constraints.path,
+                                                                 "demucs==4.1.0", "mlx-whisper==0.4.3"])) == 0 else {
+            return fail("Installing Demucs / Whisper failed. Check your connection and retry.")
         }
         status = "Downloading SheetSage2 and MERT-v2 (about 2.7 GB)…"
         let script = """
@@ -75,8 +83,13 @@ final class CoverModeInstaller: ObservableObject {
         guard (try? await Shell.run(executable: venvPython, arguments: ["-c", script, Tools.sheetSageModels])) == 0 else {
             return fail("The model download failed. Check your connection and retry.")
         }
-        status = Tools.coverModeInstalled ? "Cover Mode is ready." : "Install finished, but some files are missing."
-        failed = !Tools.coverModeInstalled
+        status = "Downloading the stem and lyrics models (about 1.6 GB)…"
+        _ = try? await Shell.run(executable: venvPython,
+                                 arguments: [Tools.engineDir.appendingPathComponent("audio_tools.py").path,
+                                             "--models", Tools.sheetSageModels, "fetch"])
+        status = SideTasks.toolsInstalled ? "Cover Mode, stems and lyrics check are ready."
+                                          : "Install finished, but some files are missing."
+        failed = !SideTasks.toolsInstalled
     }
 
     @MainActor

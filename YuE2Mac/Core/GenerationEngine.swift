@@ -135,10 +135,24 @@ final class GenerationEngine: ObservableObject {
             return nil
         }
         phase = .transcribing
+        var source = settings.referenceAudio
+        if settings.isolateVocals && SideTasks.toolsInstalled {
+            // A full mix confuses melody transcription; the isolated vocal is cleaner.
+            progressMessage = "Isolating the vocal (Demucs)…"
+            progress = nil
+            if let v = await SideTasks.isolateVocals(URL(fileURLWithPath: source)), !userCancelled {
+                source = v.path
+                notes.append("Vocal isolated before transcription")
+            } else if userCancelled {
+                return nil
+            } else {
+                notes.append("Vocal isolation failed; transcribing the full mix")
+            }
+        }
         progressMessage = "Listening to the reference…"
         let name = URL(fileURLWithPath: settings.referenceAudio).deletingPathExtension().lastPathComponent
         let out = AppPaths.outputDir.appendingPathComponent("_transcriptions/\(name) \(UUID().uuidString.prefix(4))")
-        var args = [Tools.transcribeScript, settings.referenceAudio,
+        var args = [Tools.transcribeScript, source,
                     "--models", Tools.sheetSageModels, "--output", out.path, "--ffmpeg", ffmpeg]
         if settings.coverChords { args.append("--with-chords") }
         let status = await stream(Tools.sheetSagePython, args)

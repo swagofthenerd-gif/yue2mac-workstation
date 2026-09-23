@@ -13,12 +13,17 @@ import UniformTypeIdentifiers
 struct ScoreCanvas: View {
     @ObservedObject var settings: SettingsStore
     @ObservedObject var engine: GenerationEngine
+    @ObservedObject var side: SideTasks
     let theme: AppTheme
     let writeScore: () -> Void
 
     @State private var check: ScoreCheck?
     @State private var checking = false
     @State private var showPreview = false
+    @State private var showArrange = false
+    @State private var beforeAI: String?
+    @State private var aiNotes: String?
+    @State private var showAINotes = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -45,7 +50,7 @@ struct ScoreCanvas: View {
                 }
             }
             .padding(8)
-            .frame(minHeight: 150)
+            .frame(height: 210)
             .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.10)))
 
@@ -63,6 +68,8 @@ struct ScoreCanvas: View {
                 Spacer()
                 Button("Preview") { showPreview = true }.disabled(!settings.hasScore)
                     .help("See it as sheet music and hear the notes")
+                Button("Arrange…") { showArrange = true }.disabled(!settings.hasScore || check?.ok != true)
+                    .help("Reorder, repeat or drop sections")
                 Button("Open…", action: openScore)
                 Button("Save…", action: saveScore).disabled(!settings.hasScore)
                 Button("Clear") { settings.customABC = "" }.disabled(!settings.hasScore)
@@ -70,11 +77,71 @@ struct ScoreCanvas: View {
             .controlSize(.small)
 
             Divider()
+            aiRow
             shapingControls
         }
         .onAppear(perform: recheck)
         .onChange(of: settings.customABC) { _ in recheck() }
         .sheet(isPresented: $showPreview) { ScorePreviewSheet(abc: settings.customABC) }
+        .sheet(isPresented: $showArrange) { ArrangeSheet(settings: settings, side: side) }
+    }
+
+    private var aiRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles").foregroundStyle(theme.accentColor)
+                TextField("Ask Claude to edit: \"jazzier chords\", \"minor key feel\", \"a sax solo in the interlude\"…",
+                          text: $settings.aiInstruction)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(runAI)
+                Picker("", selection: $settings.aiContract) {
+                    ForEach(AIContract.allCases) { c in Text(c.title).tag(c.rawValue) }
+                }
+                .labelsHidden().fixedSize()
+                .help("What Claude must not change. Every edit is checked with YuE2's official score tools before it's accepted.")
+                if side.busy != nil {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button("Edit", action: runAI)
+                        .disabled(!settings.hasScore || check?.ok != true
+                                  || settings.aiInstruction.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            HStack(spacing: 8) {
+                if let busy = side.busy { Text(busy).font(.caption).foregroundStyle(.secondary) }
+                else if let m = side.message { Text(m).font(.caption).foregroundStyle(.orange).lineLimit(2) }
+                if aiNotes != nil {
+                    Button("What changed") { showAINotes = true }
+                        .popover(isPresented: $showAINotes) {
+                            ScrollView { Text(aiNotes ?? "").font(.callout).textSelection(.enabled).padding(12) }
+                                .frame(width: 420, height: 260)
+                        }
+                }
+                if let old = beforeAI {
+                    Button("Undo AI edit") { settings.customABC = old; beforeAI = nil; aiNotes = nil }
+                }
+                Spacer()
+            }
+            .controlSize(.small)
+        }
+        .controlSize(.small)
+    }
+
+    private func runAI() {
+        guard side.busy == nil, settings.hasScore else { return }
+        let original = settings.customABC
+        let contract = AIContract(rawValue: settings.aiContract) ?? .keepMelody
+        Task {
+            let (edited, res) = await side.aiEdit(score: original, instruction: settings.aiInstruction,
+                                                  contract: contract, style: settings.style)
+            await MainActor.run {
+                if let edited {
+                    beforeAI = original
+                    settings.customABC = edited
+                    aiNotes = (res?.explanation ?? "") + (res?.melody_unchanged == true ? "\n\n✓ Verified: melody unchanged." : "")
+                }
+            }
+        }
     }
 
     private var shapingControls: some View {
@@ -171,7 +238,7 @@ struct CoverCanvas: View {
             dropZone
 
             HStack(spacing: 10) {
-                Button { choose() } label: { Label("Choose file…", systemImage: "folder") }
+                Button { choose() } label: { Label(settings.hasReference ? "Choose another…" : "Choose file…", systemImage: "folder") }
                 Button {
                     if recorder.isRecording { recorder.stop() }
                     else { recorder.start { url in settings.referenceAudio = url.path } }
@@ -201,6 +268,14 @@ struct CoverCanvas: View {
                     Text("Melody + chords — keep the original harmony").tag(true)
                 }
                 .fixedSize()
+                Toggle(isOn: $settings.isolateVocals) {
+                    HStack(spacing: 4) {
+                        Text("Isolate the vocal first")
+                        HelpButton(text: "Separates the singing from the band (Demucs) before transcribing, for a cleaner melody. Turn off for instrumentals or hums.")
+                    }
+                }
+                .toggleStyle(.switch)
+                .disabled(!SideTasks.toolsInstalled)
                 HStack {
                     Button { transcribe() } label: { Label("Transcribe now", systemImage: "text.viewfinder") }
                         .disabled(!settings.hasReference || engine.isRunning || !Tools.coverModeInstalled)
@@ -231,7 +306,7 @@ struct CoverCanvas: View {
             .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
             .foregroundStyle(dropTargeted ? theme.accentColor : Color.white.opacity(0.2))
             .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(dropTargeted ? 0.08 : 0.03)))
-            .frame(height: 92)
+            .frame(height: 110)
             .overlay {
                 if settings.hasReference {
                     VStack(spacing: 6) {
@@ -242,9 +317,13 @@ struct CoverCanvas: View {
                     }
                     .padding(.horizontal, 16)
                 } else {
-                    VStack(spacing: 4) {
-                        Image(systemName: "square.and.arrow.down").font(.title2).foregroundStyle(.secondary)
-                        Text("Drop an audio file here").foregroundStyle(.secondary)
+                    VStack(spacing: 8) {
+                        Button { choose() } label: {
+                            Label("Upload your song…", systemImage: "square.and.arrow.up")
+                                .padding(.horizontal, 10).padding(.vertical, 4)
+                        }
+                        .buttonStyle(.borderedProminent).tint(theme.accentColor).controlSize(.large)
+                        Text("or drag an audio file here · mp3, wav, m4a, flac, aiff").font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -262,5 +341,115 @@ struct CoverCanvas: View {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.audio, .movie]
         if panel.runModal() == .OK, let url = panel.url { settings.referenceAudio = url.path }
+    }
+}
+
+
+// MARK: - Arrange sections
+
+struct ArrangeSheet: View {
+    @ObservedObject var settings: SettingsStore
+    @ObservedObject var side: SideTasks
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var sections: [ScoreSection] = []
+    @State private var order: [Int] = []
+    @State private var reorderLyrics = true
+    @State private var error: String?
+    @State private var loading = true
+
+    /// Lyrics split into [tag] blocks; used when their count matches the score's sections.
+    private var lyricBlocks: [String] {
+        var blocks: [String] = [], current = ""
+        for line in settings.lyrics.components(separatedBy: .newlines) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("[") && t.hasSuffix("]") && !current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                blocks.append(current.trimmingCharacters(in: .newlines)); current = ""
+            }
+            current += line + "\n"
+        }
+        if !current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { blocks.append(current.trimmingCharacters(in: .newlines)) }
+        return blocks
+    }
+    private var lyricsMatch: Bool { !sections.isEmpty && lyricBlocks.count == sections.count }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Arrange sections").font(.system(.title3, weight: .semibold))
+                Spacer()
+                Text(totalLength).font(.system(.callout, design: .monospaced)).foregroundStyle(.secondary)
+            }
+            Text("Reorder, repeat or drop parts of the song. Moved sections keep their own key and meter.")
+                .font(.caption).foregroundStyle(.secondary)
+            if loading { ProgressView() }
+            List {
+                ForEach(Array(order.enumerated()), id: \.offset) { pos, idx in
+                    HStack {
+                        Text("\(pos + 1).").font(.system(.callout, design: .monospaced)).foregroundStyle(.tertiary).frame(width: 28)
+                        Text(sections.first { $0.index == idx }?.name.capitalized ?? "?").font(.body)
+                        Text("from part \(idx + 1)").font(.caption).foregroundStyle(.tertiary)
+                        Spacer()
+                        Text(length(idx)).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                        Button { move(pos, -1) } label: { Image(systemName: "arrow.up") }.disabled(pos == 0)
+                        Button { move(pos, 1) } label: { Image(systemName: "arrow.down") }.disabled(pos == order.count - 1)
+                        Button { order.insert(idx, at: pos + 1) } label: { Image(systemName: "plus.square.on.square") }
+                            .help("Repeat this section")
+                        Button { order.remove(at: pos) } label: { Image(systemName: "trash") }.disabled(order.count == 1)
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+            .frame(minHeight: 260)
+            Toggle("Rearrange the lyric sections the same way", isOn: $reorderLyrics)
+                .disabled(!lyricsMatch)
+                .help(lyricsMatch ? "Your lyrics have one [section] block per score section."
+                                  : "Your lyrics have \(lyricBlocks.count) [section] blocks and the score has \(sections.count), so they can't be matched automatically.")
+            if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            HStack {
+                Button("Reset") { order = sections.map(\.index) }
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Apply") { apply() }.keyboardShortcut(.defaultAction).disabled(order.isEmpty)
+            }
+        }
+        .padding(16)
+        .frame(width: 560, height: 520)
+        .task {
+            sections = await side.sections(of: settings.customABC)
+            order = sections.map(\.index)
+            loading = false
+            if sections.isEmpty { error = side.message ?? "Couldn't read this score's sections." }
+        }
+    }
+
+    private func length(_ idx: Int) -> String {
+        guard let s = sections.first(where: { $0.index == idx })?.seconds else { return "" }
+        return String(format: "%d:%02d", Int(s) / 60, Int(s) % 60)
+    }
+
+    private var totalLength: String {
+        let total = order.compactMap { i in sections.first { $0.index == i }?.seconds }.reduce(0, +)
+        return String(format: "Total %d:%02d", Int(total) / 60, Int(total) % 60)
+    }
+
+    private func move(_ pos: Int, _ by: Int) {
+        let target = pos + by
+        guard order.indices.contains(target) else { return }
+        order.swapAt(pos, target)
+    }
+
+    private func apply() {
+        Task {
+            guard let text = await side.arrange(settings.customABC, order: order) else {
+                error = side.message ?? "That arrangement didn't produce a valid score."; return
+            }
+            let blocks = lyricBlocks
+            settings.customABC = text
+            if reorderLyrics && lyricsMatch {
+                settings.lyrics = order.map { blocks[$0] }.joined(separator: "\n\n") + "\n"
+            }
+            dismiss()
+        }
     }
 }

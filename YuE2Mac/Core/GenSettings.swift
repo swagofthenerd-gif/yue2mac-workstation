@@ -64,6 +64,11 @@ final class SettingsStore: ObservableObject {
     // Cover mode — a reference recording transcribed by SheetSage2.
     @Published var referenceAudio: String { didSet { defaults.set(referenceAudio, forKey: "referenceAudio") } }
     @Published var coverChords: Bool { didSet { defaults.set(coverChords, forKey: "coverChords") } }
+    @Published var isolateVocals: Bool { didSet { defaults.set(isolateVocals, forKey: "isolateVocals") } }
+
+    // AI score editing (Claude CLI).
+    @Published var aiInstruction: String { didSet { defaults.set(aiInstruction, forKey: "aiInstruction") } }
+    @Published var aiContract: String { didSet { defaults.set(aiContract, forKey: "aiContract") } }
 
     // Length and takes.
     @Published var autoLength: Bool { didSet { defaults.set(autoLength, forKey: "autoLength") } }
@@ -109,6 +114,9 @@ final class SettingsStore: ObservableObject {
         tempoBPM = Self.number(defaults, "tempoBPM", 120)
         referenceAudio = defaults.string(forKey: "referenceAudio") ?? ""
         coverChords = defaults.bool(forKey: "coverChords")
+        isolateVocals = defaults.object(forKey: "isolateVocals") as? Bool ?? true
+        aiInstruction = defaults.string(forKey: "aiInstruction") ?? ""
+        aiContract = defaults.string(forKey: "aiContract") ?? AIContract.keepMelody.rawValue
         autoLength = defaults.object(forKey: "autoLength") as? Bool ?? true
         takes = Self.number(defaults, "takes", 1)
         temperature = Self.number(defaults, "temperature", d.temperature)

@@ -52,13 +52,13 @@ struct SettingsSheet: View {
             GroupBox(label: Label("Cover Mode (SheetSage2)", systemImage: "waveform.badge.plus")) {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Image(systemName: Tools.coverModeInstalled ? "checkmark.circle.fill" : "circle.dashed")
-                            .foregroundStyle(Tools.coverModeInstalled ? .green : .secondary)
-                        Text(Tools.coverModeInstalled ? "Installed — audio-to-score transcription runs on this Mac's GPU."
-                                                      : "Turns a recording or a hummed melody into a score. About 6 GB.")
+                        Image(systemName: SideTasks.toolsInstalled ? "checkmark.circle.fill" : "circle.dashed")
+                            .foregroundStyle(SideTasks.toolsInstalled ? .green : .secondary)
+                        Text(SideTasks.toolsInstalled ? "Installed: transcription, stems and lyrics check run on this Mac's GPU."
+                                                      : "Covers, humming, stems and the lyrics check. About 8 GB.")
                             .font(.callout)
                         Spacer()
-                        Button(Tools.coverModeInstalled ? "Reinstall" : "Install Cover Mode") { Task { await cover.install() } }
+                        Button(SideTasks.toolsInstalled ? "Reinstall" : "Install Cover Mode") { Task { await cover.install() } }
                             .disabled(cover.running)
                     }
                     if cover.running || !cover.status.isEmpty {
