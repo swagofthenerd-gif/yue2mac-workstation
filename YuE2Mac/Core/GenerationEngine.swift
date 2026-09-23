@@ -200,8 +200,8 @@ final class GenerationEngine: ObservableObject {
                     "--steps", String(Int(settings.steps)),
                     "--cfg-scale", String(format: "%.2f", settings.cfgScale),
                     "--takes", String(Int(settings.takes)),
-                    "--temperature", String(format: "%.3f", settings.temperature),
-                    "--top-p", String(format: "%.3f", settings.topP),
+                    "--temperature", String(format: "%.3f", sampling(settings).temperature),
+                    "--top-p", String(format: "%.3f", sampling(settings).topP),
                     "--top-k", String(Int(settings.topK)),
                     "--repetition-penalty", String(format: "%.3f", settings.repetitionPenalty),
                     "--keep-latents", "--out-dir", folder.path]
@@ -227,6 +227,9 @@ final class GenerationEngine: ObservableObject {
             if settings.keepVoice != "both" { args += ["--keep-voice", settings.keepVoice] }
         }
 
+        if settings.isCover, let f = SettingsStore.faithfulness[settings.coverFaithfulness] {
+            notes.append(String(format: "Cover: sticking to the original (%@ — randomness %.1f)", settings.coverFaithfulness, f.temperature))
+        }
         let status = await stream(AppPaths.pythonBin.path, args)
         guard status == 0, let song = SongEntry.load(folder) else {
             // Keep any finished takes; drop a folder that holds nothing playable.
@@ -275,6 +278,13 @@ final class GenerationEngine: ObservableObject {
         if let best = results.max(by: { ($0.value["coverage"] ?? 0) * ($0.value["match"] ?? 0) < ($1.value["coverage"] ?? 0) * ($1.value["match"] ?? 0) }) {
             notes.append(String(format: "Melody match: best is %@ — reference melody present in %.0f%% of it", best.key, (best.value["coverage"] ?? 0) * 100))
         }
+    }
+
+    /// Covers use the "Stick to the original" setting; everything else the Advanced sliders.
+    private func sampling(_ s: SettingsStore) -> (temperature: Double, topP: Double) {
+        guard s.isCover || (s.hasReference && !s.hasScore),
+              let f = SettingsStore.faithfulness[s.coverFaithfulness] else { return (s.temperature, s.topP) }
+        return f
     }
 
     private func planSampling(_ s: SettingsStore) -> [String] {

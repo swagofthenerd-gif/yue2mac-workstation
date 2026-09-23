@@ -79,6 +79,16 @@ final class SettingsStore: ObservableObject {
     /// A score set aside when a new reference was chosen, so it can be restored.
     @Published var stashedScore: String { didSet { defaults.set(stashedScore, forKey: "stashedScore") } }
     @Published var isolateVocals: Bool { didSet { defaults.set(isolateVocals, forKey: "isolateVocals") } }
+    /// How tightly a cover follows the reference: loose | balanced | faithful (sampling used for covers).
+    @Published var coverFaithfulness: String { didSet { defaults.set(coverFaithfulness, forKey: "coverFaithfulness") } }
+    @Published var pickClosestTake: Bool { didSet { defaults.set(pickClosestTake, forKey: "pickClosestTake") } }
+
+    /// Measured on a real cover: temperature 0.6 / top-p 0.8 kept the melody in 85–91% of every take,
+    /// against 60–84% at the model's defaults.
+    static let faithfulness: [String: (temperature: Double, topP: Double)] = [
+        "loose": (1.0, 0.95), "balanced": (0.8, 0.9), "faithful": (0.6, 0.8),
+    ]
+    var isCover: Bool { scoreSource.hasPrefix("transcription:") && hasScore }
 
     // AI score editing (Claude CLI).
     @Published var aiInstruction: String { didSet { defaults.set(aiInstruction, forKey: "aiInstruction") } }
@@ -134,6 +144,8 @@ final class SettingsStore: ObservableObject {
         // Measured: keeping the original chords made covers far more recognisable (melody present in 62% vs 38%).
         coverChords = defaults.object(forKey: "coverChordsV2") as? Bool ?? true
         isolateVocals = defaults.object(forKey: "isolateVocals") as? Bool ?? true
+        coverFaithfulness = defaults.string(forKey: "coverFaithfulness") ?? "faithful"
+        pickClosestTake = defaults.object(forKey: "pickClosestTake") as? Bool ?? true
         scoreSource = defaults.string(forKey: "scoreSource") ?? "manual"
         stashedScore = defaults.string(forKey: "stashedScore") ?? ""
         aiInstruction = defaults.string(forKey: "aiInstruction") ?? ""

@@ -79,7 +79,12 @@ struct GeneratorView: View {
         }
         .onChange(of: engine.lastSong) { song in
             selectedTake = song?.takes.first
-            guard let song, let first = song.takes.first else { return }
+            guard let song, var first = song.takes.first else { return }
+            if settings.pickClosestTake, !song.melodyMatch.isEmpty,
+               let best = song.takes.max(by: { closeness(song, $0) < closeness(song, $1) }) {
+                first = best
+                selectedTake = best
+            }
             // Don't yank a live preview someone is listening to; offer the switch instead.
             if engine.player.isPlaying && engine.player.url == nil {
                 finalWaiting = true
@@ -309,7 +314,8 @@ struct GeneratorView: View {
                     Picker("", selection: Binding(get: { take }, set: { selectTake($0, in: song) })) {
                         ForEach(Array(song.takes.enumerated()), id: \.element) { i, t in
                             if let m = song.melodyMatch[t.file] {
-                                Text("Take \(i + 1) · melody \(Int(m.coverage * 100))%").tag(t)
+                                let best = song.takes.max(by: { closeness(song, $0) < closeness(song, $1) }) == t
+                                Text("Take \(i + 1) · melody \(Int(m.coverage * 100))%" + (best && song.takes.count > 1 ? " · closest" : "")).tag(t)
                             } else {
                                 Text("Take \(i + 1)").tag(t)
                             }
@@ -702,6 +708,11 @@ struct GeneratorView: View {
         settings.seed = ""
         canvas = .score
         if autoGenerate { start(.song) }
+    }
+
+    private func closeness(_ song: SongEntry, _ t: TakeRecord) -> Double {
+        guard let m = song.melodyMatch[t.file] else { return 0 }
+        return m.coverage * m.match
     }
 
     private func selectTake(_ t: TakeRecord, in song: SongEntry) {
