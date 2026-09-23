@@ -107,6 +107,9 @@ final class SettingsStore: ObservableObject {
     @Published var planTopP: Double { didSet { defaults.set(planTopP, forKey: "planTopP") } }
     @Published var planTopK: Double { didSet { defaults.set(planTopK, forKey: "planTopK") } }
 
+    /// Which model writes songs: "yue2" (scores, covers, live playback) or "levo2" (lyrics + style).
+    @Published var generator: String { didSet { defaults.set(generator, forKey: "generator") } }
+
     // Live playback: hear the song while it's made.
     @Published var livePlayback: Bool { didSet { defaults.set(livePlayback, forKey: "livePlayback") } }
     @Published var liveKeep: Bool { didSet { defaults.set(liveKeep, forKey: "liveKeep") } }
@@ -161,6 +164,7 @@ final class SettingsStore: ObservableObject {
         planTopK = Self.number(defaults, "planTopK", d.planTopK)
         masterLoudness = defaults.bool(forKey: "masterLoudness")
         livePlayback = defaults.object(forKey: "livePlayback") as? Bool ?? true
+        generator = defaults.string(forKey: "generator") ?? "yue2"
         liveKeep = defaults.bool(forKey: "liveKeep")
     }
 

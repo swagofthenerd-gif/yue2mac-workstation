@@ -38,6 +38,14 @@ enum Tools {
             .first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
+    static var levo2Dir: URL { AppPaths.baseDir.appendingPathComponent("LeVo2", isDirectory: true) }
+    static var levo2Installed: Bool {
+        let fm = FileManager.default
+        return fm.isExecutableFile(atPath: levo2Dir.appendingPathComponent("bin/levo-cli").path)
+            && fm.fileExists(atPath: levo2Dir.appendingPathComponent("models/LeVo2-v2-large-Q8_0.gguf").path)
+            && fm.fileExists(atPath: levo2Dir.appendingPathComponent("models/LeVo2-v2-flow-Q8_0.gguf").path)
+    }
+
     static var recordingsDir: URL { AppPaths.outputDir.appendingPathComponent("_recordings", isDirectory: true) }
     static var scratchDir: URL { AppPaths.cacheDir.appendingPathComponent("work", isDirectory: true) }
 

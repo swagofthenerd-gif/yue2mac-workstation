@@ -73,7 +73,7 @@ final class GenerationEngine: ObservableObject {
         notes = []
         startedAt = Date()
         take = 1; takes = 1; planning = false
-        if job == .song && settings.livePlayback { player.beginLive() }
+        if job == .song && settings.livePlayback && settings.generator == "yue2" { player.beginLive() }
 
         runner = Task { @MainActor in
             // 1. Cover mode: transcribe the reference first when there's no score yet.
@@ -91,6 +91,11 @@ final class GenerationEngine: ObservableObject {
                 }
                 settings.customABC = abc
                 settings.scoreSource = "plan"
+                return finishOK()
+            }
+            if job == .song && settings.generator == "levo2" {
+                guard let song = await renderLeVo(settings: settings) else { return finishFailed() }
+                lastSong = song
                 return finishOK()
             }
             if job == .song {
@@ -245,6 +250,33 @@ final class GenerationEngine: ObservableObject {
             await measureMelodyMatch(song: song, reference: settings.customABC)
         }
         return SongEntry.load(folder) ?? song
+    }
+
+    /// LeVo 2: lyrics + style only (no scores, covers or live playback).
+    @MainActor
+    private func renderLeVo(settings: SettingsStore) async -> SongEntry? {
+        guard Tools.levo2Installed else {
+            logText += "LeVo 2 isn't installed. Run scripts/setup_levo2.sh from the project folder.\n"
+            return nil
+        }
+        let fm = FileManager.default
+        let folder = newSongFolder(style: settings.style)
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        var args = [Tools.engineDir.appendingPathComponent("levo2_engine.py").path,
+                    "--levo-dir", Tools.levo2Dir.path, "--style", settings.style,
+                    "--lyrics", settings.lyrics, "--seconds", String(Int(settings.maxTokens / 25)),
+                    "--takes", String(Int(settings.takes)), "--out-dir", folder.path]
+        if settings.instrumental { args.append("--instrumental") }
+        if let seed = Int(settings.seed.trimmingCharacters(in: .whitespaces)) { args += ["--seed", String(seed)] }
+        expectedTokens = Int(settings.maxTokens / 25 * 100 / 3)
+        notes.append("LeVo 2 writes from your lyrics and style; scores and covers are YuE2 features")
+        let status = await stream(AppPaths.pythonBin.path, args)
+        guard status == 0, let song = SongEntry.load(folder) else {
+            let wavs = (try? fm.contentsOfDirectory(atPath: folder.path))?.filter { $0.hasSuffix(".wav") } ?? []
+            if wavs.isEmpty { try? fm.removeItem(at: folder) }
+            return nil
+        }
+        return song
     }
 
     /// Transcribe each take and score how closely its melody follows the reference.

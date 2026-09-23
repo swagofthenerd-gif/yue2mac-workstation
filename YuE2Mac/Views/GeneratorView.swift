@@ -446,7 +446,21 @@ struct GeneratorView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Label("Model & Mode", systemImage: "gauge.with.dots.needle.bottom.50percent")
                     .font(.system(.body, weight: .semibold))
-                alignRow(title: "Model", help: "Which weights to generate with. bf16 is the full, unquantized model.") {
+                alignRow(title: "Generator", help: "YuE2: scores, covers, humming, live playback and the Advanced sliders.\nLeVo 2 (Tencent): lyrics + style only, strong at singing your exact words, about 5× slower than real time (a 3-min song ≈ 10 min). Research / education use only.") {
+                    Picker("", selection: $settings.generator) {
+                        Text("YuE2").tag("yue2")
+                        Text(Tools.levo2Installed ? "LeVo 2" : "LeVo 2 (not installed)").tag("levo2")
+                    }
+                    .labelsHidden().fixedSize()
+                }
+                if settings.generator == "levo2" {
+                    Text(Tools.levo2Installed
+                         ? "LeVo 2 uses your lyrics and style only — no score, cover or live playback. Length comes from Max length (up to 4:30)."
+                         : "Run scripts/setup_levo2.sh once to install LeVo 2 (about 6.5 GB).")
+                        .font(.caption).foregroundStyle(Tools.levo2Installed ? Color.secondary : Color.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                alignRow(title: "Model", help: "Which YuE2 weights to generate with. bf16 is the full, unquantized model.") {
                     Picker("", selection: Binding(
                         get: { settings.modelDir ?? "" },
                         set: { settings.modelDir = $0 }

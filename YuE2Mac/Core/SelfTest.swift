@@ -86,6 +86,29 @@ enum SelfTest {
             suite.removePersistentDomain(forName: "yue2mac.selftest")
             return finish(report, results)
         }
+        if mode == "levo" {
+            s.generator = "levo2"; s.maxTokens = 500; s.takes = 1; s.seed = "3"; s.livePlayback = true
+            let t0 = Date()
+            engine.run(.song, settings: s, engineRoot: root, modelDir: model)
+            await wait()
+            var r: [String: Any] = ["phase": "\(engine.phase)", "seconds_taken": Int(Date().timeIntervalSince(t0)),
+                                    "takes": engine.lastSong?.takes.map { ["file": $0.file, "seconds": $0.seconds] } ?? [],
+                                    "live_used": engine.player.isLive || engine.player.sections > 0,
+                                    "failure": engine.phase == .failed ? engine.failureReason : ""]
+            if let f = engine.lastSong?.folder { r["folder"] = f.path }
+            // Stop mid-way: nothing of LeVo may keep running.
+            engine.run(.song, settings: s, engineRoot: root, modelDir: model)
+            while engine.phase != .ar && engine.isRunning { try? await Task.sleep(nanoseconds: 200_000_000) }
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            engine.cancel()
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            let left = await runCapture("/usr/bin/pgrep", ["-fl", "levo-cli|levo-render|levo2_engine"])
+            r["after_stop_phase"] = "\(engine.phase)"
+            r["levo_processes_left"] = left.out.trimmingCharacters(in: .whitespacesAndNewlines)
+            results["levo"] = r
+            suite.removePersistentDomain(forName: "yue2mac.selftest")
+            return finish(report, results)
+        }
         if mode == "player" {
             // Transport checks on a real take, muted: play, seek, skip, pause, loop, speed.
             func trace(_ m: String) {
