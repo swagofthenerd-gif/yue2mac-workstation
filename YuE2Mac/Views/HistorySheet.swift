@@ -14,6 +14,7 @@ struct HistorySheet: View {
     @State private var songs: [SongEntry] = []
     @State private var selection: SongEntry?
     @State private var take: TakeRecord?
+    @StateObject private var player = Player()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,7 +59,12 @@ struct HistorySheet: View {
                         .fixedSize()
                     }
                     if let t = take {
-                        AudioPlayer(url: song.takeURL(t)).id(song.takeURL(t))
+                        PlayerView(player: player, theme: settings.theme,
+                                   previous: song.takes.count > 1 ? { step(-1, song) } : nil,
+                                   next: song.takes.count > 1 ? { step(1, song) } : nil)
+                            .onAppear { player.load(song.takeURL(t)) }
+                            .onChange(of: t) { nt in player.load(song.takeURL(nt), autoPlay: player.isPlaying) }
+                            .onChange(of: song) { ns in if let f = ns.takes.first { player.load(ns.takeURL(f)) } }
                         if t.semantic_truncated {
                             Label("This take hit the length limit — its ending may be cut.", systemImage: "scissors")
                                 .font(.caption).foregroundStyle(.orange)
@@ -91,6 +97,11 @@ struct HistorySheet: View {
             Text(songs.isEmpty ? "No songs yet — generated songs appear here." : "Select a song")
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func step(_ by: Int, _ song: SongEntry) {
+        guard let t = take, let i = song.takes.firstIndex(of: t) else { return }
+        take = song.takes[(i + by + song.takes.count) % song.takes.count]
     }
 
     private func record(_ song: SongEntry) -> SongRecord? {

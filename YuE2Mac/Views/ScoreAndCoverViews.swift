@@ -230,6 +230,7 @@ struct CoverCanvas: View {
     let showScore: () -> Void
 
     @StateObject private var recorder = HumRecorder()
+    @StateObject private var refPlayer = Player()
     @State private var dropTargeted = false
 
     var body: some View {
@@ -317,14 +318,16 @@ struct CoverCanvas: View {
             .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
             .foregroundStyle(dropTargeted ? theme.accentColor : Color.white.opacity(0.2))
             .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(dropTargeted ? 0.08 : 0.03)))
-            .frame(height: 110)
+            .frame(height: 118)
             .overlay {
                 if settings.hasReference {
                     VStack(spacing: 6) {
                         Text(URL(fileURLWithPath: settings.referenceAudio).lastPathComponent)
                             .font(.system(.callout, weight: .semibold)).lineLimit(1).truncationMode(.middle)
-                        AudioPlayer(url: URL(fileURLWithPath: settings.referenceAudio))
-                            .id(settings.referenceAudio).frame(maxWidth: 420)
+                        PlayerView(player: refPlayer, theme: theme, compact: true)
+                            .frame(maxWidth: 520)
+                            .onAppear { refPlayer.load(URL(fileURLWithPath: settings.referenceAudio)) }
+                            .onChange(of: settings.referenceAudio) { p in if !p.isEmpty { refPlayer.load(URL(fileURLWithPath: p)) } }
                     }
                     .padding(.horizontal, 16)
                 } else {

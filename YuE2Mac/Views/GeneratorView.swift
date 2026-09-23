@@ -26,6 +26,7 @@ struct GeneratorView: View {
     @State private var showLog = false
     @State private var showAdvanced = false
     @State private var selectedTake: TakeRecord?
+    @State private var finalWaiting = false
     @State private var exportMessage: String?
 
     private var theme: AppTheme { settings.theme }
@@ -76,7 +77,16 @@ struct GeneratorView: View {
         .sheet(item: Binding(get: { lyricsReport.map(LyricsReportBox.init) }, set: { lyricsReport = $0?.report })) { box in
             LyricsReportSheet(report: box.report)
         }
-        .onChange(of: engine.lastSong) { song in selectedTake = song?.takes.first }
+        .onChange(of: engine.lastSong) { song in
+            selectedTake = song?.takes.first
+            guard let song, let first = song.takes.first else { return }
+            // Don't yank a live preview someone is listening to; offer the switch instead.
+            if engine.player.isPlaying && engine.player.url == nil {
+                finalWaiting = true
+            } else {
+                engine.player.load(song.takeURL(first))
+            }
+        }
         .onChange(of: engine.phase) { phase in
             // A finished score-only job or transcription lands in the Score tab for review.
             if phase == .finished, engine.lastJob != .song { canvas = .score }
@@ -239,7 +249,14 @@ struct GeneratorView: View {
                 }
 
                 if engine.isRunning {
-                    if engine.lastJob == .song && settings.livePlayback { LiveBar(live: engine.live, theme: theme) }
+                    if engine.lastJob == .song && settings.livePlayback {
+                        if engine.player.isLive && engine.player.sections > 0 {
+                            PlayerView(player: engine.player, theme: theme)
+                        } else if engine.player.isLive {
+                            Text("Live playback starts as soon as the first section is ready…")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                    }
                     Text(processingText).font(.system(.body))
                     if let p = engine.progress {
                         ProgressView(value: p).progressViewStyle(.linear).tint(theme.accentColor)
@@ -266,16 +283,30 @@ struct GeneratorView: View {
             }
             .padding(12)
         }
-        .frame(height: 186)
+        .frame(height: 214)
     }
 
     @ViewBuilder
     private func songResult(_ song: SongEntry) -> some View {
         let take = selectedTake ?? song.takes.first
         if let take {
+            if finalWaiting {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles").foregroundStyle(theme.accentColor)
+                    Text("The final version is ready. You're still hearing the live preview.").font(.caption)
+                    Button("Switch now (keep my place)") {
+                        let at = engine.player.currentSeconds
+                        finalWaiting = false
+                        engine.player.load(song.takeURL(take))
+                        engine.player.seek(to: at)
+                        engine.player.play()
+                    }
+                    .controlSize(.small)
+                }
+            }
             HStack(spacing: 10) {
                 if song.takes.count > 1 {
-                    Picker("", selection: Binding(get: { take }, set: { selectedTake = $0 })) {
+                    Picker("", selection: Binding(get: { take }, set: { selectTake($0, in: song) })) {
                         ForEach(Array(song.takes.enumerated()), id: \.element) { i, t in
                             if let m = song.melodyMatch[t.file] {
                                 Text("Take \(i + 1) · melody \(Int(m.coverage * 100))%").tag(t)
@@ -286,15 +317,9 @@ struct GeneratorView: View {
                     }
                     .labelsHidden().fixedSize()
                 }
-                AudioPlayer(url: song.takeURL(take), onPlay: { engine.live.stop() }).id(song.takeURL(take))
-            }
-            if engine.live.isPlaying {
-                HStack(spacing: 6) {
-                    Image(systemName: "dot.radiowaves.left.and.right").foregroundStyle(theme.accentColor)
-                    Text(settings.liveKeep ? "Still playing the live stream." : "Still playing the live preview — the final version is ready above.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Button("Stop preview") { engine.live.stop() }.controlSize(.small)
-                }
+                PlayerView(player: engine.player, theme: theme,
+                           previous: song.takes.count > 1 ? { stepTake(-1, in: song) } : nil,
+                           next: song.takes.count > 1 ? { stepTake(1, in: song) } : nil)
             }
             HStack(spacing: 8) {
                 Button { reuseScore(song.scoreURL, autoGenerate: true) } label: { Label("New take, same song", systemImage: "arrow.triangle.2.circlepath") }
@@ -679,6 +704,18 @@ struct GeneratorView: View {
         if autoGenerate { start(.song) }
     }
 
+    private func selectTake(_ t: TakeRecord, in song: SongEntry) {
+        let wasPlaying = engine.player.isPlaying
+        selectedTake = t
+        finalWaiting = false
+        engine.player.load(song.takeURL(t), autoPlay: wasPlaying)
+    }
+
+    private func stepTake(_ by: Int, in song: SongEntry) {
+        guard let cur = selectedTake ?? song.takes.first, let i = song.takes.firstIndex(of: cur) else { return }
+        selectTake(song.takes[(i + by + song.takes.count) % song.takes.count], in: song)
+    }
+
     private func songIsInstrumental(_ song: SongEntry) -> Bool {
         guard let data = try? Data(contentsOf: song.folder.appendingPathComponent("song.json")),
               let rec = try? JSONDecoder().decode(SongRecord.self, from: data) else { return false }
@@ -798,34 +835,6 @@ private func labeledSlider(_ title: String,
 
 private func formatValue(_ v: Double, whole: Bool) -> String {
     whole ? "\(Int(v))" : String(format: "%.1f", v)
-}
-
-/// Live-playback transport shown while a song is being made.
-struct LiveBar: View {
-    @ObservedObject var live: LivePlayer
-    let theme: AppTheme
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Button { live.toggle() } label: {
-                Image(systemName: live.isPlaying ? "pause.fill" : "play.fill").frame(width: 22, height: 22)
-            }
-            .buttonStyle(.borderedProminent).tint(theme.accentColor)
-            .disabled(live.sections == 0)
-            if live.sections == 0 {
-                Text("Live playback starts when the first section is ready…").font(.callout).foregroundStyle(.secondary)
-            } else {
-                ProgressView(value: live.position, total: max(live.bufferedSeconds, 0.1)).tint(theme.accentColor)
-                Text("\(clock(live.position)) / \(clock(live.bufferedSeconds)) made")
-                    .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
-                if live.waiting {
-                    Text("catching up…").font(.caption).foregroundStyle(.orange)
-                }
-            }
-        }
-    }
-
-    private func clock(_ t: Double) -> String { String(format: "%d:%02d", Int(t) / 60, Int(t) % 60) }
 }
 
 /// A fixed-size card whose content starts at the top and is clipped to the card.

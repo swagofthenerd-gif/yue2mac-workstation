@@ -26,8 +26,8 @@ final class GenerationEngine: ObservableObject {
     @Published var lastJob: Job = .song
     @Published var lastTranscription: URL?
 
-    /// Plays sections as the engine finishes them (live playback).
-    let live = LivePlayer()
+    /// The main player: live sections while a song is made, then the finished takes.
+    let player = Player()
 
     private var process: Process?
     private var runner: Task<Void, Never>?
@@ -73,7 +73,7 @@ final class GenerationEngine: ObservableObject {
         notes = []
         startedAt = Date()
         take = 1; takes = 1; planning = false
-        if job == .song { live.reset() }
+        if job == .song && settings.livePlayback { player.beginLive() }
 
         runner = Task { @MainActor in
             // 1. Cover mode: transcribe the reference first when there's no score yet.
@@ -119,6 +119,7 @@ final class GenerationEngine: ObservableObject {
 
     private func finishFailed() {
         progress = nil
+        if player.isLive { player.endLive() }
         if userCancelled {
             phase = .cancelled
             progressMessage = "Stopped."
@@ -367,8 +368,9 @@ final class GenerationEngine: ObservableObject {
         } else if line.hasPrefix("[live] ") {
             // "[live] <path> <start> <end>" — a playable section is ready.
             if let m = match("^\\[live\\] (.+\\.wav) ([0-9.]+) ([0-9.]+)$", line) {
-                live.enqueue(URL(fileURLWithPath: m[1]))
+                player.append(URL(fileURLWithPath: m[1]))
             } else if line == "[live] done" {
+                player.endLive()
                 progressMessage = "All sections streamed · rendering the final version" + takeSuffix
             }
         } else if line.hasPrefix("[semantic] prefix") {

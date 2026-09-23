@@ -263,24 +263,35 @@ def check_score(abc_text: str) -> dict:
 class LiveStreamer:
     """Refines and decodes a song in sections while it is still being composed.
 
-    Hooked into the composing loop's per-token callback: every `win` frames it runs
-    flow matching on the newest section (plus `fade` frames of overlap), blends the
-    overlap into the previous section, decodes the settled audio and writes it as
-    `section-NN.wav`, announcing each with `[live] <path> <start_s> <end_s>`.
-    The last `fade` frames of a section are held back until the next one blends in.
+    Hooked into the composing loop's per-token callback. Each section is refined with the
+    end of the already-played music pinned in place (flow-matching inpainting), so it
+    continues from what the listener just heard instead of starting blind. Section sizes
+    adapt: the next one is as long as can be finished before playback catches up, using the
+    composing and refining speeds measured so far. Each settled stretch of audio is written
+    as `section-NN.wav` and announced with `[live] <path> <start_s> <end_s>`.
     """
 
+    HALO = 16  # VAE frames of right-hand context held back until the next section exists
+
     def __init__(self, eng, prefix, seed, steps, out_dir: Path, max_frames: int,
-                 section_s=15.0, fade_s=2.0):
+                 first_s=16.0, context_s=8.0, live_steps=24, max_s=30.0, min_s=15.0, margin_s=2.0):
         import numpy as np
-        self.np, self.g, self.eng = np, eng.g, eng
-        self.prefix, self.steps, self.out = prefix, steps, out_dir
-        self.win, self.fade = int(section_s * TOKENS_PER_SECOND), int(fade_s * TOKENS_PER_SECOND)
+        import mlx.core as mx
+        self.np, self.mx, self.g, self.eng = np, mx, eng.g, eng
+        self.prefix, self.out = prefix, out_dir
+        self.steps = min(steps, live_steps)
+        self.ctx = int(context_s * TOKENS_PER_SECOND)
+        self.min_f, self.max_f = int(min_s * TOKENS_PER_SECOND), int(max_s * TOKENS_PER_SECOND)
+        self.margin = margin_s
+        self.win = int(first_s * TOKENS_PER_SECOND)
         self.codec, self.start, self.emitted, self.k = [], 0, 0, 0
         self.lat = np.zeros((max_frames, 64), np.float32)
-        import mlx.core as mx
-        self.mx = mx
         self.noise = mx.random.normal((max_frames, 64), key=mx.random.key(seed + 7919))
+        self.t_compose0 = time.perf_counter()
+        self.compose_s = 0.24      # seconds per second of music; re-measured as we go
+        self.refine_s = 0.35       # seconds per second of refined frames (context included)
+        self.first_emit = None
+        self.overhead_s = 1.0      # per-section fixed cost (prefill, decode, file); re-measured
         out_dir.mkdir(parents=True, exist_ok=True)
 
     def on_token(self, _phase, token):
@@ -291,41 +302,65 @@ class LiveStreamer:
             self.section(final=False)
 
     def refine(self, a, b, close):
+        """Frames [a:b]; frames before self.start are pinned to what was already played."""
         g, mx, model = self.g, self.mx, self.eng.pipe.model
         ar_tokens = self.prefix + [c + g.CODEC_OFFSET for c in self.codec[a:b]] + ([g.MUSIC_END] if close else [])
         cache = model.nar_prefill(ar_tokens)
-        state = self.noise[a:b].astype(mx.bfloat16)
-        dt = 1.0 / self.steps
+        noise = self.noise[a:b].astype(mx.bfloat16)
+        k = self.start - a
+        known = mx.array(self.lat[a:self.start]).astype(mx.bfloat16) if k else None
+
+        def pin(state, t):
+            # Rectified flow: at time t the pinned frames sit at t*noise + (1-t)*data.
+            if not k:
+                return state
+            return mx.concatenate([noise[:k] * t + known * (1 - t), state[k:]], axis=0)
+
+        state, dt = noise, 1.0 / self.steps
         for step in range(self.steps):
             t = 1.0 - step * dt
+            state = pin(state, t)
             v1 = model.nar_velocity(state, g._logit(t), cache, len(ar_tokens))
-            mid = state - v1 * (dt / 2)
+            mid = pin(state - v1 * (dt / 2), t - dt / 2)
             state = state - model.nar_velocity(mid, g._logit(t - dt / 2), cache, len(ar_tokens)) * dt
             mx.eval(state)
-        return self.np.array(state.astype(mx.float32))
+        return self.np.array(pin(state, 0.0).astype(mx.float32))
 
     def section(self, final):
-        np = self.np
+        now = time.perf_counter()
         b = len(self.codec) if final else self.start + self.win
         if b > self.start:
-            a = max(0, self.start - self.fade)
+            new_s = (b - self.start) / TOKENS_PER_SECOND
+            self.compose_s = 0.5 * self.compose_s + 0.5 * (now - self.t_compose0) / max(new_s, 1e-3)
+            a = max(0, self.start - self.ctx)
+            t0 = time.perf_counter()
             z = self.refine(a, b, close=final)
-            if a < self.start:  # equal-power blend across the overlap
-                n = self.start - a
-                w = (np.sin(np.linspace(0, np.pi / 2, n)) ** 2)[:, None]
-                self.lat[a:self.start] = self.lat[a:self.start] * (1 - w) + z[:n] * w
-                self.lat[self.start:b] = z[n:]
-            else:
-                self.lat[a:b] = z
+            self.refine_s = 0.5 * self.refine_s + 0.5 * (time.perf_counter() - t0) / ((b - a) / TOKENS_PER_SECOND)
+            self.lat[self.start:b] = z[self.start - a:]
             self.start = b
-        self.emit(self.start if final else self.start - self.fade)
+        t_emit = time.perf_counter()
+        self.emit(self.start if final else self.start - self.HALO)
+        self.overhead_s = 0.5 * self.overhead_s + 0.5 * (time.perf_counter() - t_emit + 0.4)
+        if not final:
+            self.win = self.next_window()
+        self.t_compose0 = time.perf_counter()
+
+    def next_window(self):
+        """Longest next section that can be composed and refined before playback catches up."""
+        if self.first_emit is None:
+            return self.win
+        made = self.emitted / TOKENS_PER_SECOND
+        ahead = made - (time.perf_counter() - self.first_emit)
+        ctx_cost = self.refine_s * self.ctx / TOKENS_PER_SECOND
+        seconds = (ahead - self.margin - ctx_cost - self.overhead_s) / (self.compose_s + self.refine_s)
+        return int(max(self.min_f, min(self.max_f, seconds * TOKENS_PER_SECOND)))
 
     def emit(self, upto):
         e0 = self.emitted
         if upto <= e0:
             return
-        mx, halo, frame = self.mx, 16, 1920
-        lo, hi = max(0, e0 - halo), min(self.start, upto + halo)
+        mx, frame = self.mx, 1920
+        lo, hi = max(0, e0 - self.HALO), min(self.start, upto + self.HALO)
         tile = mx.clip(self.eng.pipe.vae(mx.array(self.lat[None, lo:hi]))[0], -1, 1)
         crop = (e0 - lo) * frame
         audio = tile[crop:crop + (upto - e0) * frame]
@@ -334,6 +369,8 @@ class LiveStreamer:
         path = self.out / f"section-{self.k:02d}.wav"
         self.g.write_wav(path, audio)
         self.emitted = upto
+        if self.first_emit is None:
+            self.first_emit = time.perf_counter()
         log(f"[live] {path} {e0 / TOKENS_PER_SECOND:.2f} {upto / TOKENS_PER_SECOND:.2f}")
 
     def finish(self):
@@ -387,8 +424,9 @@ class Engine:
         progress = self.pipe._progress("semantic")
         live = None
         if live_dir is not None:
-            live = LiveStreamer(self, prefix, seed, n, live_dir, sem_sampling.max_tokens + 1, live_section, live_fade)
-            log(f"[live] streaming {live_section:.0f}s sections")
+            live = LiveStreamer(self, prefix, seed, n, live_dir, sem_sampling.max_tokens + 1,
+                                first_s=live_section, context_s=live_fade)
+            log(f"[live] streaming: first {live_section:.0f}s, then sections sized to stay ahead")
 
             def on_token(phase, token):
                 progress(phase, token)
@@ -645,8 +683,8 @@ def main():
     gen.add_argument("--keep-latents", action="store_true", help="keep latents for re-rendering")
     gen.add_argument("--out-dir", type=Path, required=True)
     gen.add_argument("--live", action="store_true", help="stream the first take in playable sections as it's composed")
-    gen.add_argument("--live-section", type=float, default=15.0, help="seconds per live section")
-    gen.add_argument("--live-fade", type=float, default=2.0, help="seconds of crossfade between live sections")
+    gen.add_argument("--live-section", type=float, default=16.0, help="seconds in the first live section (later ones adapt)")
+    gen.add_argument("--live-fade", type=float, default=8.0, help="seconds of already-played music pinned as context for each live section")
     gen.add_argument("--live-keep", action="store_true", help="keep the streamed audio as the final take (skip the whole-song render)")
 
     pl = sub.add_parser("plan")

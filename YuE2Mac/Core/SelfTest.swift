@@ -86,21 +86,78 @@ enum SelfTest {
             suite.removePersistentDomain(forName: "yue2mac.selftest")
             return finish(report, results)
         }
+        if mode == "player" {
+            // Transport checks on a real take, muted: play, seek, skip, pause, loop, speed.
+            func trace(_ m: String) {
+                let line = "\(Date().timeIntervalSince1970) \(m)\n"
+                if let h = FileHandle(forWritingAtPath: report + ".trace") { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); h.closeFile() }
+                else { try? line.write(toFile: report + ".trace", atomically: true, encoding: .utf8) }
+            }
+            trace("start")
+            let p = Player()
+            p.muted = true
+            let file = ProcessInfo.processInfo.environment["YUE2MAC_SELFTEST_FILE"] ?? ""
+            p.load(URL(fileURLWithPath: file))
+            var r: [String: Any] = ["duration": p.duration]
+            trace("p.play(); try? await")
+            p.play(); try? await Task.sleep(nanoseconds: 1_500_000_000)
+            r["after_1.5s_play"] = (p.currentSeconds * 10).rounded() / 10
+            trace("p.seek(to: 30);")
+            p.seek(to: 30); try? await Task.sleep(nanoseconds: 1_000_000_000)
+            r["after_seek_30_plus_1s"] = (p.currentSeconds * 10).rounded() / 10
+            trace("p.skip(10);")
+            p.skip(10); try? await Task.sleep(nanoseconds: 500_000_000)
+            r["after_skip_plus10"] = (p.currentSeconds * 10).rounded() / 10
+            trace("p.rate = 2;")
+            p.rate = 2; try? await Task.sleep(nanoseconds: 1_000_000_000)
+            r["after_1s_at_2x"] = (p.currentSeconds * 10).rounded() / 10
+            p.rate = 1
+            trace("p.pause(); let pause")
+            p.pause(); let paused = p.currentSeconds; try? await Task.sleep(nanoseconds: 800_000_000)
+            r["pause_holds_position"] = abs(p.currentSeconds - paused) < 0.05
+            trace("p.loop = true;")
+            p.loop = true; p.seek(to: p.duration - 1); p.play(); try? await Task.sleep(nanoseconds: 2_000_000_000)
+            r["loop_wrapped_to_start"] = p.currentSeconds < 3 && p.isPlaying
+            trace("p.loop = false;")
+            p.loop = false; p.seek(to: p.duration - 0.5); try? await Task.sleep(nanoseconds: 1_500_000_000)
+            r["stops_at_end"] = !p.isPlaying
+            r["peaks_per_second"] = (Double(p.peaks.count) / max(p.duration, 1) * 10).rounded() / 10
+            // Live: append sections while playing, then seek back into already-made audio.
+            trace("let live = Player()")
+            let live = Player(); live.muted = true
+            live.beginLive()
+            let dir = ProcessInfo.processInfo.environment["YUE2MAC_SELFTEST_LIVE_DIR"] ?? ""
+            let parts = ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).filter { $0.hasSuffix(".wav") }.sorted()
+            for (i, f) in parts.enumerated() {
+                live.append(URL(fileURLWithPath: dir).appendingPathComponent(f))
+                if i == 0 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+            }
+            r["live_sections"] = live.sections
+            r["live_made_s"] = live.duration.rounded()
+            r["live_playing"] = live.isPlaying
+            trace("live.seek(to: 20)")
+            live.seek(to: 20); try? await Task.sleep(nanoseconds: 1_000_000_000)
+            r["live_after_seek_20"] = (live.currentSeconds * 10).rounded() / 10
+            live.endLive()
+            results["player"] = r
+            suite.removePersistentDomain(forName: "yue2mac.selftest")
+            return finish(report, results)
+        }
         if mode == "live" {
             // Live playback: when does each section reach the player, and does it stay ahead?
             s.maxTokens = 2250; s.autoLength = false; s.takes = 1; s.steps = 32; s.cfgScale = 1.0
             s.temperature = 1.0; s.topP = 0.95
             s.livePlayback = true; s.liveKeep = ProcessInfo.processInfo.environment["YUE2MAC_LIVE_KEEP"] == "1"
-            engine.live.autoplay = false          // measure only; don't play through the speakers
+            engine.player.autoplay = false          // measure only; don't play through the speakers
             var arrivals: [[String: Double]] = []
             let t0 = Date()
             engine.run(.song, settings: s, engineRoot: root, modelDir: model)
             var seen = 0
             while engine.isRunning || engine.phase == .idle {
-                if engine.live.sections > seen {
-                    seen = engine.live.sections
+                if engine.player.sections > seen {
+                    seen = engine.player.sections
                     arrivals.append(["section": Double(seen), "at_s": Date().timeIntervalSince(t0).rounded(),
-                                     "music_ready_s": engine.live.bufferedSeconds.rounded()])
+                                     "music_ready_s": engine.player.bufferedSeconds.rounded()])
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }

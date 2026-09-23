@@ -74,7 +74,19 @@ By default the whole song is then rendered again in one piece (seamless) and sav
 version" skips that. Measured (self-test `YUE2MAC_SELFTEST=live`): 1:30 song, first sound at 26 s,
 a new section every ~12.5 s, playback never waited, finished at 2:23 including the final render.
 
-### Making the live sound closer to the final render (measured, not yet wired in)
+### Live sound quality — wired in
+
+`LiveStreamer` now pins the last 8 s of already-played latents while refining each new section
+(flow-matching inpainting), uses 24 steps, and sizes each section from the measured composing, refining
+and per-section overhead so playback stays ahead (first section 16 s, then 15–30 s). A 6 s minimum caused
+9 s of pauses (≈1 s fixed cost per section), so the minimum is 15 s. Measured: 1:30 song, first sound 24 s
+after Generate, 5 sections, no pauses.
+
+The app has one `Player` (AVAudioEngine + time-pitch) for live streams, takes, History and the reference
+preview: waveform seek/scrub, ±10 s, restart, prev/next take, loop, 0.5–2× speed, volume/mute, and a
+Playback menu (⌥Space, ⌥←/→, ⌥⇧←, ⌥L, ⌥M). Verified with `YUE2MAC_SELFTEST=player` (muted).
+
+### Making the live sound closer to the final render (measurements)
 
 `engine/live_quality_test.py`: closeness to the whole render (latent RMS; another whole render with
 different noise = 1.12, i.e. equally valid) and refine cost per second of music (budget ≈ 0.75):
