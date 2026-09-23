@@ -1,0 +1,64 @@
+#!/bin/zsh
+# yue2mac — the workstation from Terminal (or for another AI to script).
+#
+#   yue2mac song  --style "..." --lyrics-file lyrics.txt [any engine flag…]
+#   yue2mac cover song.mp3 --style "..." --lyrics-file lyrics.txt [--with-chords] [flags…]
+#   yue2mac score --style "..." --lyrics-file lyrics.txt --out plan.abc
+#   yue2mac transcribe song.mp3 [--with-chords] [--out folder]
+#   yue2mac abc check|inspect|set-tempo|strip-chords|fit-length|compare score.abc [...]
+#   yue2mac decode --latents take-1.latents.npy --out take-1.wav
+#
+# Songs land in the app's Output folder (and show up in its History) unless
+# --out-dir is given. Run `yue2mac song --help` for every generation flag.
+set -e
+
+BASE="$HOME/Library/Application Support/YuE2Mac"
+PY="$BASE/Python/bin/python"
+SS_PY="$BASE/SheetSage/venv/bin/python"
+APP_ENGINE="$HOME/Applications/YuE2Mac.app/Contents/Resources/engine"
+SRC_ENGINE="${0:A:h}/../engine"
+ENGINE_DIR="$APP_ENGINE"; [ -f "$ENGINE_DIR/yue2mac_engine.py" ] || ENGINE_DIR="$SRC_ENGINE"
+ENGINE="$ENGINE_DIR/yue2mac_engine.py"
+SCRIPTS="$(defaults read arinltte.YuE2Mac engineRoot 2>/dev/null || echo "$BASE/Scripts")"
+MODEL="$(defaults read arinltte.YuE2Mac modelDir 2>/dev/null || echo "$BASE/Models/bf16")"
+FFMPEG="$(for f in ~/.pixi/bin/ffmpeg /opt/homebrew/bin/ffmpeg /usr/local/bin/ffmpeg; do [ -x "$f" ] && echo "$f" && break; done)"
+export PYTHONUNBUFFERED=1 TIKTOKEN_CACHE_DIR="$BASE/Cache" HF_HUB_OFFLINE=1
+
+new_folder() { echo "$BASE/Output/$(date '+%Y-%m-%d %H%M%S') ${1:-cli}"; }
+has_flag() { local f="$1"; shift; for a in "$@"; do [ "$a" = "$f" ] && return 0; done; return 1; }
+
+cmd="${1:-}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+  song)
+    has_flag --out-dir "$@" && exec "$PY" "$ENGINE" --scripts "$SCRIPTS" --model "$MODEL" generate --keep-latents "$@"
+    exec "$PY" "$ENGINE" --scripts "$SCRIPTS" --model "$MODEL" generate --keep-latents --auto-length \
+      --out-dir "$(new_folder cli)" "$@" ;;
+  score)
+    exec "$PY" "$ENGINE" --scripts "$SCRIPTS" --model "$MODEL" plan "$@" ;;
+  transcribe)
+    audio="$1"; shift
+    out="$BASE/Output/_transcriptions/$(basename "${audio%.*}") $(date +%H%M%S)"
+    extra=()
+    while [ $# -gt 0 ]; do
+      case "$1" in --out) out="$2"; shift 2 ;; *) extra+=("$1"); shift ;; esac
+    done
+    "$SS_PY" "$ENGINE_DIR/transcribe.py" "$audio" --models "$BASE/SheetSage/models" --output "$out" --ffmpeg "$FFMPEG" "${extra[@]}"
+    echo "$out/score.abc" ;;
+  cover)
+    audio="$1"; shift
+    chords=(); rest=()
+    for a in "$@"; do [ "$a" = "--with-chords" ] && chords=(--with-chords) || rest+=("$a"); done
+    t="$BASE/Output/_transcriptions/$(basename "${audio%.*}") $(date +%H%M%S)"
+    "$SS_PY" "$ENGINE_DIR/transcribe.py" "$audio" --models "$BASE/SheetSage/models" --output "$t" --ffmpeg "$FFMPEG" "${chords[@]}"
+    out="$(new_folder "cover $(basename "${audio%.*}")")"
+    "$PY" "$ENGINE" --scripts "$SCRIPTS" --model "$MODEL" generate --keep-latents --auto-length \
+      --abc-file "$t/score.abc" --out-dir "$out" "${rest[@]}"
+    cp -R "$t" "$out/transcription" ;;
+  abc)
+    exec "$PY" "$ENGINE" abc "$@" ;;
+  decode)
+    exec "$PY" "$ENGINE" --scripts "$SCRIPTS" --model "$MODEL" decode "$@" ;;
+  *)
+    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+    exit 1 ;;
+esac
