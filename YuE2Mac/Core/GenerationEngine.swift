@@ -26,6 +26,9 @@ final class GenerationEngine: ObservableObject {
     @Published var lastJob: Job = .song
     @Published var lastTranscription: URL?
 
+    /// Plays sections as the engine finishes them (live playback).
+    let live = LivePlayer()
+
     private var process: Process?
     private var runner: Task<Void, Never>?
     private var userCancelled = false
@@ -70,6 +73,7 @@ final class GenerationEngine: ObservableObject {
         notes = []
         startedAt = Date()
         take = 1; takes = 1; planning = false
+        if job == .song { live.reset() }
 
         runner = Task { @MainActor in
             // 1. Cover mode: transcribe the reference first when there's no score yet.
@@ -200,6 +204,10 @@ final class GenerationEngine: ObservableObject {
         args += planSampling(settings)
         if let seed = Int(settings.seed.trimmingCharacters(in: .whitespaces)) { args += ["--seed", String(seed)] }
         if settings.instrumental { args.append("--instrumental") }
+        if settings.livePlayback {
+            args.append("--live")
+            if settings.liveKeep { args.append("--live-keep") }
+        }
         if settings.autoLength { args.append("--auto-length") }
         args += ["--max-tokens", String(Int(min(settings.maxTokens, SettingsStore.tokenCap)))]
         expectedTokens = Int(settings.maxTokens)
@@ -316,6 +324,13 @@ final class GenerationEngine: ObservableObject {
         } else if line.hasPrefix("[take]") {
             if let m = match("\\[take\\] (\\d+)/(\\d+)", line), let i = Int(m[1]), let n = Int(m[2]) {
                 take = i; takes = n
+            }
+        } else if line.hasPrefix("[live] ") {
+            // "[live] <path> <start> <end>" — a playable section is ready.
+            if let m = match("^\\[live\\] (.+\\.wav) ([0-9.]+) ([0-9.]+)$", line) {
+                live.enqueue(URL(fileURLWithPath: m[1]))
+            } else if line == "[live] done" {
+                progressMessage = "All sections streamed · rendering the final version" + takeSuffix
             }
         } else if line.hasPrefix("[semantic] prefix") {
             phase = .ar

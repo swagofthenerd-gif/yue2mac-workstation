@@ -204,6 +204,87 @@ def check_score(abc_text: str) -> dict:
 
 # ── Model-backed stages ─────────────────────────────────────────────────────
 
+class LiveStreamer:
+    """Refines and decodes a song in sections while it is still being composed.
+
+    Hooked into the composing loop's per-token callback: every `win` frames it runs
+    flow matching on the newest section (plus `fade` frames of overlap), blends the
+    overlap into the previous section, decodes the settled audio and writes it as
+    `section-NN.wav`, announcing each with `[live] <path> <start_s> <end_s>`.
+    The last `fade` frames of a section are held back until the next one blends in.
+    """
+
+    def __init__(self, eng, prefix, seed, steps, out_dir: Path, max_frames: int,
+                 section_s=15.0, fade_s=2.0):
+        import numpy as np
+        self.np, self.g, self.eng = np, eng.g, eng
+        self.prefix, self.steps, self.out = prefix, steps, out_dir
+        self.win, self.fade = int(section_s * TOKENS_PER_SECOND), int(fade_s * TOKENS_PER_SECOND)
+        self.codec, self.start, self.emitted, self.k = [], 0, 0, 0
+        self.lat = np.zeros((max_frames, 64), np.float32)
+        import mlx.core as mx
+        self.mx = mx
+        self.noise = mx.random.normal((max_frames, 64), key=mx.random.key(seed + 7919))
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+    def on_token(self, _phase, token):
+        if not (self.g.CODEC_OFFSET <= token < self.g.CODEC_OFFSET + self.g.CODEC_SIZE):
+            return  # the end marker
+        self.codec.append(token - self.g.CODEC_OFFSET)
+        if len(self.codec) >= self.start + self.win:
+            self.section(final=False)
+
+    def refine(self, a, b, close):
+        g, mx, model = self.g, self.mx, self.eng.pipe.model
+        ar_tokens = self.prefix + [c + g.CODEC_OFFSET for c in self.codec[a:b]] + ([g.MUSIC_END] if close else [])
+        cache = model.nar_prefill(ar_tokens)
+        state = self.noise[a:b].astype(mx.bfloat16)
+        dt = 1.0 / self.steps
+        for step in range(self.steps):
+            t = 1.0 - step * dt
+            v1 = model.nar_velocity(state, g._logit(t), cache, len(ar_tokens))
+            mid = state - v1 * (dt / 2)
+            state = state - model.nar_velocity(mid, g._logit(t - dt / 2), cache, len(ar_tokens)) * dt
+            mx.eval(state)
+        return self.np.array(state.astype(mx.float32))
+
+    def section(self, final):
+        np = self.np
+        b = len(self.codec) if final else self.start + self.win
+        if b > self.start:
+            a = max(0, self.start - self.fade)
+            z = self.refine(a, b, close=final)
+            if a < self.start:  # equal-power blend across the overlap
+                n = self.start - a
+                w = (np.sin(np.linspace(0, np.pi / 2, n)) ** 2)[:, None]
+                self.lat[a:self.start] = self.lat[a:self.start] * (1 - w) + z[:n] * w
+                self.lat[self.start:b] = z[n:]
+            else:
+                self.lat[a:b] = z
+            self.start = b
+        self.emit(self.start if final else self.start - self.fade)
+
+    def emit(self, upto):
+        e0 = self.emitted
+        if upto <= e0:
+            return
+        mx, halo, frame = self.mx, 16, 1920
+        lo, hi = max(0, e0 - halo), min(self.start, upto + halo)
+        tile = mx.clip(self.eng.pipe.vae(mx.array(self.lat[None, lo:hi]))[0], -1, 1)
+        crop = (e0 - lo) * frame
+        audio = tile[crop:crop + (upto - e0) * frame]
+        mx.eval(audio)
+        self.k += 1
+        path = self.out / f"section-{self.k:02d}.wav"
+        self.g.write_wav(path, audio)
+        self.emitted = upto
+        log(f"[live] {path} {e0 / TOKENS_PER_SECOND:.2f} {upto / TOKENS_PER_SECOND:.2f}")
+
+    def finish(self):
+        self.section(final=True)
+        return self.lat[:len(self.codec)]
+
+
 class Engine:
     def __init__(self, scripts: Path, model: Path):
         sys.path.insert(0, str(scripts))
@@ -233,7 +314,8 @@ class Engine:
             log("[plan] ABC hit max_tokens")
         return ids, tok.decode(ids), truncated
 
-    def song(self, style, lyrics, cot, seed, abc_ids, sem_sampling, cfg_scale, steps, on_latents=None):
+    def song(self, style, lyrics, cot, seed, abc_ids, sem_sampling, cfg_scale, steps, on_latents=None,
+             live_dir=None, live_section=15.0, live_fade=2.0, live_keep=False):
         """Semantic -> latents -> audio for a fixed plan. Mirrors Yue2Pipeline.__call__."""
         g, tok = self.g, self.pipe.tokenizer
         prefix = g.token_prefix(tok, style, lyrics, cot, abc_ids)
@@ -245,21 +327,40 @@ class Engine:
             sem_sampling = replace(sem_sampling, max_tokens=room, min_tokens=min(sem_sampling.min_tokens, room))
         log(f"[semantic] prefix {len(prefix)} tokens, cfg {guidance}")
         times = {}
+        n = steps or self.pipe.ode_steps
+        progress = self.pipe._progress("semantic")
+        live = None
+        if live_dir is not None:
+            live = LiveStreamer(self, prefix, seed, n, live_dir, sem_sampling.max_tokens + 1, live_section, live_fade)
+            log(f"[live] streaming {live_section:.0f}s sections")
+
+            def on_token(phase, token):
+                progress(phase, token)
+                live.on_token(phase, token)
+        else:
+            on_token = progress
         t = time.perf_counter()
         ids, truncated = g.generate_tokens(self.pipe.model, prefix, sem_sampling, seed, "semantic",
-                                           negative, guidance, legacy_off=cot == "off",
-                                           on_token=self.pipe._progress("semantic"))
+                                           negative, guidance, legacy_off=cot == "off", on_token=on_token)
         times["semantic"] = time.perf_counter() - t
         if truncated:
             log("[semantic] hit max_tokens")
         codec = [x - g.CODEC_OFFSET for x in ids]
         if not codec:
             raise RuntimeError("Semantic stage produced no codec tokens")
-        n = steps or self.pipe.ode_steps
-        log(f"[nar] {len(codec)} frames ({len(codec) * 1920 / g.SAMPLE_RATE:.1f}s), {n} midpoint steps")
         t = time.perf_counter()
-        latents = g.synthesize(self.pipe.model, prefix, codec, seed, n,
-                               on_progress=lambda i, total: i % 4 == 0 and log(f"[nar] step {i}/{total}"))
+        if live is not None:
+            streamed = live.finish()
+            times["live_tail"] = time.perf_counter() - t
+            log("[live] done")
+        t = time.perf_counter()
+        if live is not None and live_keep:
+            import mlx.core as mx
+            latents = mx.array(streamed)
+        else:
+            log(f"[nar] {len(codec)} frames ({len(codec) * 1920 / g.SAMPLE_RATE:.1f}s), {n} midpoint steps")
+            latents = g.synthesize(self.pipe.model, prefix, codec, seed, n,
+                                   on_progress=lambda i, total: i % 4 == 0 and log(f"[nar] step {i}/{total}"))
         times["nar"] = time.perf_counter() - t
         if on_latents:
             on_latents(latents)
@@ -348,8 +449,11 @@ def cmd_generate(a):
         name = f"take-{i}" if len(seeds) > 1 else "song"
         log(f"[take] {i}/{len(seeds)} seed {seed}")
         latents_path = out / f"{name}.latents.npy"
+        live_dir = (out / "live") if (a.live and i == 1) else None
         audio, info = eng.song(style, lyrics, cot, seed, abc_ids, sem_s, a.cfg_scale, a.steps,
-                               on_latents=(lambda z, p=latents_path: np.save(p, np.array(z))) if a.keep_latents else None)
+                               on_latents=(lambda z, p=latents_path: np.save(p, np.array(z))) if a.keep_latents else None,
+                               live_dir=live_dir, live_section=a.live_section, live_fade=a.live_fade,
+                               live_keep=a.live_keep)
         wav = out / f"{name}.wav"
         eng.g.write_wav(wav, audio)
         takes.append({"file": wav.name, "seed": seed, **info})
@@ -468,6 +572,10 @@ def main():
     gen.add_argument("--auto-length", action="store_true", help="size the length cap to the score")
     gen.add_argument("--keep-latents", action="store_true", help="keep latents for re-rendering")
     gen.add_argument("--out-dir", type=Path, required=True)
+    gen.add_argument("--live", action="store_true", help="stream the first take in playable sections as it's composed")
+    gen.add_argument("--live-section", type=float, default=15.0, help="seconds per live section")
+    gen.add_argument("--live-fade", type=float, default=2.0, help="seconds of crossfade between live sections")
+    gen.add_argument("--live-keep", action="store_true", help="keep the streamed audio as the final take (skip the whole-song render)")
 
     pl = sub.add_parser("plan")
     request_flags(pl)

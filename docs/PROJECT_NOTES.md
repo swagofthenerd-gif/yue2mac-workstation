@@ -50,17 +50,24 @@ building blocks so every stage and sampling control is reachable. Every helper p
 | Demucs stems | 1:49 song in 12 s |
 | Refining in 15 s sections | ~8 s per section → live playback would stay ahead |
 
-## In progress: live playback (Suno-style)
+## Live playback (Suno-style) — built
+
+`generate --live` refines and decodes ~15 s sections inside the composing loop's token callback
+(`LiveStreamer` in `yue2mac_engine.py`), crossfading 2 s overlaps and announcing each finished
+`live/section-NN.wav`; the app queues them gaplessly on an `AVAudioPlayerNode` (`LivePlayer.swift`).
+By default the whole song is then rendered again in one piece (seamless) and saved; "Keep the streamed
+version" skips that. Measured (self-test `YUE2MAC_SELFTEST=live`): 1:30 song, first sound at 26 s,
+a new section every ~12.5 s, playback never waited, finished at 2:23 including the final render.
+
+### Earlier: the listening test
 
 `engine/stream_test.py` renders one composition four ways (whole; 15 s sections closed or open; 30 s
 sections) into `Output/_tests/live-playback-test`. Objective check: section joins show no bigger tone or
-loudness jumps than random moments in the same song. **Waiting on a listening verdict.** Then:
+loudness jumps than random moments in the same song. The listening verdict decides the default for "Keep the streamed version":
 - joins clean and quality equal → stream sections and keep the streamed result;
 - joins clean but whole render better → stream a preview, swap in the whole render when done;
 - joins audible → longer overlaps / smarter crossfades first.
 
-App side still to build: an `AVAudioEngine` player that schedules section buffers as the engine writes
-them, and an engine mode that interleaves composing and refining.
 
 ## Other ideas not built yet
 

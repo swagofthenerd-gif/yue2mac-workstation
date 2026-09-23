@@ -239,6 +239,7 @@ struct GeneratorView: View {
                 }
 
                 if engine.isRunning {
+                    if engine.lastJob == .song && settings.livePlayback { LiveBar(live: engine.live, theme: theme) }
                     Text(processingText).font(.system(.body))
                     if let p = engine.progress {
                         ProgressView(value: p).progressViewStyle(.linear).tint(theme.accentColor)
@@ -279,7 +280,15 @@ struct GeneratorView: View {
                     }
                     .labelsHidden().fixedSize()
                 }
-                AudioPlayer(url: song.takeURL(take)).id(song.takeURL(take))
+                AudioPlayer(url: song.takeURL(take), onPlay: { engine.live.stop() }).id(song.takeURL(take))
+            }
+            if engine.live.isPlaying {
+                HStack(spacing: 6) {
+                    Image(systemName: "dot.radiowaves.left.and.right").foregroundStyle(theme.accentColor)
+                    Text(settings.liveKeep ? "Still playing the live stream." : "Still playing the live preview — the final version is ready above.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Stop preview") { engine.live.stop() }.controlSize(.small)
+                }
             }
             HStack(spacing: 8) {
                 Button { reuseScore(song.scoreURL, autoGenerate: true) } label: { Label("New take, same song", systemImage: "arrow.triangle.2.circlepath") }
@@ -439,6 +448,19 @@ struct GeneratorView: View {
                               help: "Flow-matching steps that turn the composition into sound. 32 is the model's standard; fewer is faster and rougher.")
                 labeledSlider("CFG — style obedience", $settings.cfgScale, 1...5, whole: false, theme: theme, step: 0.05,
                               help: "1.0 is the model's default. Above 1 follows the style prompt harder but runs a second pass (about 1.5× slower on the main stage) and may reduce quality.")
+                Toggle(isOn: $settings.livePlayback) {
+                    HStack(spacing: 4) {
+                        Text("Play while generating")
+                        HelpButton(text: "Hear the song as it's made: every ~15 s section is refined and played as soon as it's composed, starting about half a minute after you press Generate. The first take streams; extra takes render normally.")
+                    }
+                }
+                Toggle(isOn: $settings.liveKeep) {
+                    HStack(spacing: 4) {
+                        Text("Keep the streamed version")
+                        HelpButton(text: "Off (safer): after streaming, the whole song is rendered again in one piece and saved — seamless, about 30 s extra per minute of song. On: the streamed sections are the final song, so it's done the moment streaming ends. Sections are crossfaded, but joins can be audible.")
+                    }
+                }
+                .disabled(!settings.livePlayback)
             }
             .padding(12)
         }
@@ -765,6 +787,34 @@ private func labeledSlider(_ title: String,
 
 private func formatValue(_ v: Double, whole: Bool) -> String {
     whole ? "\(Int(v))" : String(format: "%.1f", v)
+}
+
+/// Live-playback transport shown while a song is being made.
+struct LiveBar: View {
+    @ObservedObject var live: LivePlayer
+    let theme: AppTheme
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button { live.toggle() } label: {
+                Image(systemName: live.isPlaying ? "pause.fill" : "play.fill").frame(width: 22, height: 22)
+            }
+            .buttonStyle(.borderedProminent).tint(theme.accentColor)
+            .disabled(live.sections == 0)
+            if live.sections == 0 {
+                Text("Live playback starts when the first section is ready…").font(.callout).foregroundStyle(.secondary)
+            } else {
+                ProgressView(value: live.position, total: max(live.bufferedSeconds, 0.1)).tint(theme.accentColor)
+                Text("\(clock(live.position)) / \(clock(live.bufferedSeconds)) made")
+                    .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                if live.waiting {
+                    Text("catching up…").font(.caption).foregroundStyle(.orange)
+                }
+            }
+        }
+    }
+
+    private func clock(_ t: Double) -> String { String(format: "%d:%02d", Int(t) / 60, Int(t) % 60) }
 }
 
 /// A fixed-size card whose content starts at the top and is clipped to the card.

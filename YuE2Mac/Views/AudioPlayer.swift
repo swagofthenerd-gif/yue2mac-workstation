@@ -7,6 +7,7 @@ import AVFoundation
 
 struct AudioPlayer: View {
     let url: URL
+    var onPlay: (() -> Void)? = nil
     @State private var player: AVAudioPlayer?
     @State private var isPlaying = false
     @State private var current: TimeInterval = 0
@@ -59,6 +60,7 @@ struct AudioPlayer: View {
             p.pause()
             isPlaying = false
         } else {
+            onPlay?()
             p.play()
             isPlaying = true
         }

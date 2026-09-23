@@ -86,6 +86,44 @@ enum SelfTest {
             suite.removePersistentDomain(forName: "yue2mac.selftest")
             return finish(report, results)
         }
+        if mode == "live" {
+            // Live playback: when does each section reach the player, and does it stay ahead?
+            s.maxTokens = 2250; s.autoLength = false; s.takes = 1; s.steps = 32; s.cfgScale = 1.0
+            s.temperature = 1.0; s.topP = 0.95
+            s.livePlayback = true; s.liveKeep = ProcessInfo.processInfo.environment["YUE2MAC_LIVE_KEEP"] == "1"
+            engine.live.autoplay = false          // measure only; don't play through the speakers
+            var arrivals: [[String: Double]] = []
+            let t0 = Date()
+            engine.run(.song, settings: s, engineRoot: root, modelDir: model)
+            var seen = 0
+            while engine.isRunning || engine.phase == .idle {
+                if engine.live.sections > seen {
+                    seen = engine.live.sections
+                    arrivals.append(["section": Double(seen), "at_s": Date().timeIntervalSince(t0).rounded(),
+                                     "music_ready_s": engine.live.bufferedSeconds.rounded()])
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            let total = Date().timeIntervalSince(t0)
+            // Would playback that starts at the first section ever run dry?
+            var stall = 0.0
+            if let first = arrivals.first?["at_s"] {
+                var prevReady = 0.0
+                for a in arrivals {
+                    let playedBy = (a["at_s"] ?? 0) - first     // seconds of audio already consumed
+                    stall = max(stall, playedBy - prevReady)
+                    prevReady = a["music_ready_s"] ?? prevReady
+                }
+            }
+            results["live"] = ["phase": "\(engine.phase)", "keep_streamed": s.liveKeep, "arrivals": arrivals,
+                               "first_sound_after_s": arrivals.first?["at_s"] ?? -1,
+                               "longest_wait_during_playback_s": stall.rounded(),
+                               "finished_after_s": total.rounded(),
+                               "song_seconds": engine.lastSong?.takes.first?.seconds ?? 0,
+                               "failure": engine.phase == .failed ? engine.failureReason : ""]
+            suite.removePersistentDomain(forName: "yue2mac.selftest")
+            return finish(report, results)
+        }
         if mode == "full" {
             // A normal song at the model's standard quality, length fitted to its own score.
             s.maxTokens = 4500; s.autoLength = true; s.takes = 1; s.steps = 32; s.cfgScale = 1.0
