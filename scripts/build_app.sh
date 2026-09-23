@@ -35,8 +35,9 @@ done
 iconutil -c icns "$TMP/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
 rm -rf "$TMP"
 
-echo "▸ Engine scripts…"
+echo "▸ Engine scripts and web resources…"
 cp engine/*.py "$APP/Contents/Resources/engine/"
+cp -R YuE2Mac/Resources/. "$APP/Contents/Resources/"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

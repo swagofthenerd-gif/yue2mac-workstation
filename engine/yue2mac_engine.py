@@ -310,7 +310,9 @@ def cmd_decode(a):
 
 def cmd_abc(a):
     text = a.score.read_text(encoding="utf-8")
-    if a.action == "inspect":
+    if a.action == "check":
+        print(json.dumps(check_score(text)))
+    elif a.action == "inspect":
         out = check_score(text)
         if out["ok"]:
             out["report"] = abc_tools.report(abc_tools.parse_abc(text))
@@ -381,7 +383,7 @@ def main():
     dec.add_argument("--out", type=Path, required=True)
 
     ab = sub.add_parser("abc")
-    ab.add_argument("action", choices=("inspect", "set-tempo", "strip-chords", "fit-length", "compare"))
+    ab.add_argument("action", choices=("check", "inspect", "set-tempo", "strip-chords", "fit-length", "compare"))
     ab.add_argument("score", type=Path)
     ab.add_argument("--output", type=Path)
     ab.add_argument("--bpm", type=int)

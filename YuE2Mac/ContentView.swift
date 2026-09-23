@@ -17,7 +17,10 @@ struct ContentView: View {
                 GeneratorView(setup: setup, engine: engine)
             }
         }
-        .frame(minWidth: 900, minHeight: 640)
+        .frame(minWidth: 980, minHeight: 680)
+        .task {
+            if let report = SelfTest.reportPath { await SelfTest.run(report: report) }
+        }
     }
 }
 
