@@ -3,17 +3,15 @@
 //
 
 import Foundation
-import Observation
 
 /// Available model quantizations are discovered by scanning the engine folder,
 /// but a model name can also be stored so it survives relaunch.
-@Observable
-final class SettingsStore {
+final class SettingsStore: ObservableObject {
     static let shared = SettingsStore()
 
     private let defaults = UserDefaults.standard
 
-    var theme: AppTheme {
+    @Published var theme: AppTheme {
         didSet { defaults.set(theme.rawValue, forKey: "theme") }
     }
 
@@ -23,36 +21,36 @@ final class SettingsStore {
         set { defaults.set(newValue, forKey: "preferredVariant") }
     }
 
-    var engineRoot: String? {
+    @Published var engineRoot: String? {
         didSet { defaults.set(engineRoot, forKey: "engineRoot") }
     }
-    var modelDir: String? {
+    @Published var modelDir: String? {
         didSet { defaults.set(modelDir, forKey: "modelDir") }
     }
 
     // Persisted generation preferences.
-    var style: String {
+    @Published var style: String {
         didSet { defaults.set(style, forKey: "style") }
     }
-    var lyrics: String {
+    @Published var lyrics: String {
         didSet { defaults.set(lyrics, forKey: "lyrics") }
     }
-    var planning: String {          // off | melody | full
+    @Published var planning: String {          // off | melody | full
         didSet { defaults.set(planning, forKey: "planning") }
     }
-    var steps: Double {
+    @Published var steps: Double {
         didSet { defaults.set(steps, forKey: "steps") }
     }
-    var cfgScale: Double {
+    @Published var cfgScale: Double {
         didSet { defaults.set(cfgScale, forKey: "cfgScale") }
     }
-    var maxTokens: Double {
+    @Published var maxTokens: Double {
         didSet { defaults.set(maxTokens, forKey: "maxTokens") }
     }
-    var seed: String {
+    @Published var seed: String {
         didSet { defaults.set(seed, forKey: "seed") }
     }
-    var instrumental: Bool {
+    @Published var instrumental: Bool {
         didSet { defaults.set(instrumental, forKey: "instrumental") }
     }
 

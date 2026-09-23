@@ -4,21 +4,19 @@
 //
 
 import Foundation
-import Observation
 
-@Observable
-final class GenerationEngine {
+final class GenerationEngine: ObservableObject {
     enum Phase: Equatable {
         case idle, preparing, planning, ar, nar, decoding, writing, finished, failed, cancelled
     }
 
-    var phase: Phase = .idle
-    var progressMessage = ""
+    @Published var phase: Phase = .idle
+    @Published var progressMessage = ""
     /// nil = indeterminate; a value = a fraction for a determinate bar.
-    var progress: Double?
-    var logText = ""
+    @Published var progress: Double?
+    @Published var logText = ""
 
-    var outputURL: URL?
+    @Published var outputURL: URL?
     private var currentOut: URL?
     private var process: Process?
     private var runnerTask: Task<Void, Never>?

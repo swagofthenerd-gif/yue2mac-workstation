@@ -8,9 +8,9 @@ import AppKit
 import UniformTypeIdentifiers
 
 struct GeneratorView: View {
-    @Bindable var setup: SetupManager
-    @Bindable var engine: GenerationEngine
-    @Bindable private var settings = SettingsStore.shared
+    @ObservedObject var setup: SetupManager
+    @ObservedObject var engine: GenerationEngine
+    @ObservedObject private var settings = SettingsStore.shared
 
     @State private var outputPath = defaultOutputPath()
     @State private var showSettings = false

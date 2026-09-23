@@ -5,8 +5,8 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var setup = SetupManager()
-    @State private var engine = GenerationEngine()
+    @StateObject private var setup = SetupManager()
+    @StateObject private var engine = GenerationEngine()
 
     var body: some View {
         Group {
@@ -21,6 +21,3 @@ struct ContentView: View {
     }
 }
 
-#Preview {
-    ContentView()
-}

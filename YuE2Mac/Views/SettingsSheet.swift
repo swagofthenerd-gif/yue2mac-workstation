@@ -5,11 +5,11 @@
 import SwiftUI
 
 struct SettingsSheet: View {
-    let setup: SetupManager
+    @ObservedObject var setup: SetupManager
     @Environment(\.dismiss) private var dismiss
     @State private var variant = SystemInfo.recommendedVariant
 
-    private var settings: SettingsStore { SettingsStore.shared }
+    @ObservedObject private var settings = SettingsStore.shared
     private var theme: AppTheme { settings.theme }
 
     var body: some View {

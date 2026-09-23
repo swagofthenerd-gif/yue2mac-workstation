@@ -7,10 +7,11 @@
 import SwiftUI
 
 struct SetupView: View {
-    @Bindable var setup: SetupManager
+    @ObservedObject var setup: SetupManager
     @State private var variant = SystemInfo.recommendedVariant
 
-    private var theme: AppTheme { SettingsStore.shared.theme }
+    @ObservedObject private var settings = SettingsStore.shared
+    private var theme: AppTheme { settings.theme }
 
     var body: some View {
         ZStack {
@@ -174,6 +175,3 @@ struct SetupView: View {
     }
 }
 
-#Preview {
-    SetupView(setup: SetupManager())
-}

@@ -5,10 +5,8 @@
 //
 
 import Foundation
-import Observation
 
-@Observable
-final class SetupManager {
+final class SetupManager: ObservableObject {
     enum State { case idle, installing, ready, failed }
 
     /// Hugging Face repo that hosts the MLX-converted YuE2 engine. The Python
@@ -16,10 +14,10 @@ final class SetupManager {
     /// (`8bit/`, `4bit/`, `bf16/`). Mirrored by `npario/YuE2-3B-MLX`.
     static let modelRepo = "ahmadw/YuE2-3B-MLX"
 
-    var state: State = .idle
-    var status = "Ready."
-    var progress: Double = 0
-    var errorMessage: String?
+    @Published var state: State = .idle
+    @Published var status = "Ready."
+    @Published var progress: Double = 0
+    @Published var errorMessage: String?
 
     /// Absolute path to where `generate.py` lives (its folder also holds yue2_model.py / yue2_vae.py).
     var engineRoot: String? { SettingsStore.shared.engineRoot }
