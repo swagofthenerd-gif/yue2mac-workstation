@@ -148,6 +148,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--levo-dir", type=Path, required=True)
     ap.add_argument("--size", default="large", choices=("large", "medium"))
+    ap.add_argument("--precision", default="best", choices=("best", "full", "q8"),
+                    help="best = full precision (LeLM F16 + flow F32) when downloaded, else 8-bit")
     ap.add_argument("--style", required=True)
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--lyrics")
@@ -162,8 +164,11 @@ def main():
     a = ap.parse_args()
 
     bin_dir, models = a.levo_dir / "bin", a.levo_dir / "models"
-    lm = models / f"LeVo2-v2-{a.size}-Q8_0.gguf"
-    flow, vae = models / "LeVo2-v2-flow-Q8_0.gguf", models / "LeVo2-v2-vae-F32.gguf"
+    full_lm, full_flow = models / f"LeVo2-v2-{a.size}-F16.gguf", models / "LeVo2-v2-flow-F32.gguf"
+    use_full = a.precision == "full" or (a.precision == "best" and full_lm.exists() and full_flow.exists())
+    lm = full_lm if use_full else models / f"LeVo2-v2-{a.size}-Q8_0.gguf"
+    flow = full_flow if use_full else models / "LeVo2-v2-flow-Q8_0.gguf"
+    vae = models / "LeVo2-v2-vae-F32.gguf"
     for f in (bin_dir / "levo-cli", bin_dir / "levo-render", lm, flow, vae):
         if not f.exists():
             raise SystemExit(f"LeVo 2 isn't installed ({f.name} missing). Run scripts/setup_levo2.sh.")
@@ -173,7 +178,7 @@ def main():
     a.out_dir.mkdir(parents=True, exist_ok=True)
     (a.out_dir / "levo-lyrics.txt").write_text(levo_lyrics, encoding="utf-8")
     steps_total = int(seconds * 100 / 3 + 0.5)       # the port runs ~33.3 steps per second of music
-    log(f"[note] LeVo 2 ({a.size}, 8-bit) · {seconds:.0f}s · -> {steps_total} tokens")
+    log(f"[note] LeVo 2 ({a.size}, {'full precision' if use_full else '8-bit'}) · {seconds:.0f}s · -> {steps_total} tokens")
     first = a.seed if a.seed is not None else random.randint(0, 999_999)
     takes = []
     t_start = time.perf_counter()

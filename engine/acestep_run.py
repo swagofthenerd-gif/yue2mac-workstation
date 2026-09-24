@@ -35,7 +35,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("task", choices=("text2music", "cover", "complete", "lego", "repaint"))
     ap.add_argument("--model", help="DiT: acestep-v15-xl-sft (default), acestep-v15-xl-base, acestep-v15-turbo …")
-    ap.add_argument("--lm", default="acestep-5Hz-lm-1.7B", help="5 Hz LM for text2music planning (skipped for covers)")
+    ap.add_argument("--lm", help="5 Hz LM for planning (skipped for covers); default: the largest downloaded (4B > 1.7B)")
     ap.add_argument("--no-lm", action="store_true")
     ap.add_argument("--caption", required=True)
     ap.add_argument("--lyrics", default="")
@@ -52,8 +52,12 @@ def main():
     ap.add_argument("--bpm", type=int)
     ap.add_argument("--key", default="")
     ap.add_argument("--language", default="en")
-    ap.add_argument("--steps", type=int, help="diffusion steps (SFT/Base default 50, turbo 8)")
-    ap.add_argument("--guidance", type=float, help="CFG for non-turbo models")
+    ap.add_argument("--steps", type=int, help="diffusion steps; default 50 for SFT/Base, 8 for turbo (the library's "
+                                               "own default is 8 for every model, which under-renders SFT/Base badly)")
+    ap.add_argument("--guidance", type=float, help="CFG for non-turbo models (default 8, ACE's best-quality range 7-9)")
+    ap.add_argument("--shift", type=float, help="timestep shift (default 3.0, ACE's best-quality setting; turbo too)")
+    ap.add_argument("--no-adg", action="store_true", help="turn off Adaptive Dual Guidance (on by default for Base models)")
+    ap.add_argument("--takes", type=int, default=1, help="batch several takes in one run (ACE: 'almost never generate just one')")
     ap.add_argument("--seed", type=int, default=-1)
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()
@@ -81,6 +85,9 @@ def main():
     if not ok:
         raise SystemExit(f"Couldn't load {model}: {msg}")
     llm = LLMHandler()
+    if a.lm is None:
+        a.lm = next((m for m in ("acestep-5Hz-lm-4B", "acestep-5Hz-lm-1.7B", "acestep-5Hz-lm-0.6B")
+                     if (ACE / "checkpoints" / m).exists()), "acestep-5Hz-lm-1.7B")
     use_lm = a.task == "text2music" and not a.no_lm
     if use_lm:
         log(f"[ace] loading {a.lm}")
@@ -106,14 +113,19 @@ def main():
         kw.update(audio_cover_strength=a.strength, cover_noise_strength=a.cover_noise)
     if a.task in ("repaint", "lego"):
         kw.update(repainting_start=a.start, repainting_end=a.end)
-    if a.steps:
-        kw["inference_steps"] = a.steps
-    if a.guidance is not None:
-        kw["guidance_scale"] = a.guidance
+    turbo = "turbo" in model
+    # ACE-Step's own best-quality recipe (docs/en/INFERENCE.md): 64+ steps, shift 3.0, CFG 7-9,
+    # ADG on for base models. The library default of 8 steps is only right for turbo.
+    kw["inference_steps"] = a.steps or (8 if turbo else 64)
+    kw["shift"] = a.shift if a.shift is not None else 3.0
+    if not turbo:
+        kw["guidance_scale"] = a.guidance if a.guidance is not None else 8.0
+        if "base" in model and not a.no_adg:
+            kw["use_adg"] = True
     params = GenerationParams(**kw)
     fixed = a.seed is not None and a.seed >= 0
-    config = GenerationConfig(batch_size=1, audio_format="wav", use_random_seed=not fixed,
-                              seeds=[a.seed] if fixed else None)
+    config = GenerationConfig(batch_size=a.takes, audio_format="wav", use_random_seed=not fixed,
+                              seeds=[a.seed + i for i in range(a.takes)] if fixed else None)
 
     log(f"[ace] generating ({a.task})")
     t1 = time.perf_counter()
@@ -121,13 +133,18 @@ def main():
     res = generate_music(dit, llm, params, config, save_dir=str(out_dir))
     if not res.success or not res.audios:
         raise SystemExit(f"ACE-Step failed: {res.error}")
-    produced = Path(res.audios[0]["path"])
     a.out.parent.mkdir(parents=True, exist_ok=True)
-    produced.replace(a.out)
+    outs = []
+    for i, audio in enumerate(res.audios):
+        dest = a.out if len(res.audios) == 1 else a.out.with_name(f"{a.out.stem}-take{i + 1}{a.out.suffix}")
+        Path(audio["path"]).replace(dest)
+        outs.append(str(dest))
     gen_s = time.perf_counter() - t1
     meta = {k: res.audios[0].get(k) for k in ("key", "bpm", "duration") if k in res.audios[0]}
     log(f"[done] {a.out}")
-    log("[result] " + json.dumps({"file": str(a.out), "task": a.task, "model": model, "load_seconds": round(load_s, 1),
+    log("[result] " + json.dumps({"files": outs, "file": outs[0], "task": a.task, "steps": kw["inference_steps"],
+                                  "shift": kw["shift"], "guidance": kw.get("guidance_scale"), "adg": kw.get("use_adg", False),
+                                  "lm": a.lm if use_lm else None, "model": model, "load_seconds": round(load_s, 1),
                                   "generate_seconds": round(gen_s, 1), "seed": res.audios[0].get("params", {}).get("seed"),
                                   **meta}, default=str))
 
