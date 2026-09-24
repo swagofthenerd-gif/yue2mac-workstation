@@ -176,7 +176,9 @@ def main():
                     help="length cap; the model ends the song itself, so the default (4:30 max) never cuts it")
     ap.add_argument("--takes", type=int, default=1)
     ap.add_argument("--seed", type=int)
-    ap.add_argument("--steps", type=int, help="render (flow) steps; the port's default when omitted")
+    ap.add_argument("--steps", type=int, default=10,
+                    help="render (flow) steps. 10 = Tencent's code2sound; the port's own default of 50 "
+                         "renders audibly darker (-3.5 dB above 8 kHz on the same tokens)")
     ap.add_argument("--cfg", type=float, help="render guidance; the port's default when omitted")
     ap.add_argument("--out-dir", type=Path, required=True)
     a = ap.parse_args()
