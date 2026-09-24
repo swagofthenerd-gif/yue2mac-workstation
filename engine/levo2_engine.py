@@ -37,10 +37,27 @@ def log(msg):
     print(msg, file=sys.stderr, flush=True)
 
 
+CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
+
+
+def to_levo_description(style: str, instrumental: bool) -> str:
+    """Style → the conditioning string Tencent's generate.py builds: lower-case comma tags behind
+    the `[Musicality-very-high]` quality tag the v2 model was trained with (the port adds nothing)."""
+    tags = [t.strip() for t in re.split(r"[,\n]", style.lower().rstrip(" .")) if t.strip()]
+    tags = [t for t in tags if not t.startswith("[musicality") and t != "[pure-music]"]
+    head = ["[Musicality-very-high]"] + (["[Pure-Music]"] if instrumental else [])
+    return ", ".join(head + tags) + ("." if tags else "")
+
+
 def to_levo_lyrics(text: str, instrumental: bool) -> str:
-    """App lyrics → LeVo sections. Unknown tags become verses; untagged lines start a verse."""
+    """App lyrics → LeVo sections. Unknown tags become verses; untagged lines start a verse.
+    Lyrics already in LeVo's one-line form (`[verse] a. b. ; [chorus] …`) pass through.
+    Official rule: English sections end with a period before `;`, Chinese/Japanese/Korean don't."""
     if instrumental:
         return "[intro-short] ; [inst-long] ; [inst-medium] ; [outro-short]"
+    one_line = " ".join(text.split())
+    if re.match(r"^\[[a-z-]+\]", one_line) and " ; [" in one_line.replace("];", "] ;") and "\n[" not in text.strip():
+        return one_line
     sections, tag, lines = [], None, []
 
     def flush():
@@ -51,7 +68,7 @@ def to_levo_lyrics(text: str, instrumental: bool) -> str:
             sections.append(f"[{t}]")
         elif lines:
             body = ". ".join(l.rstrip(" .,;") for l in lines)
-            sections.append(f"[{t}] {body}")
+            sections.append(f"[{t}] {body}" + ("" if CJK.search(body) else "."))
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
@@ -155,7 +172,8 @@ def main():
     g.add_argument("--lyrics")
     g.add_argument("--lyrics-file", type=Path)
     ap.add_argument("--instrumental", action="store_true")
-    ap.add_argument("--seconds", type=float, default=120)
+    ap.add_argument("--seconds", type=float, default=270,
+                    help="length cap; the model ends the song itself, so the default (4:30 max) never cuts it")
     ap.add_argument("--takes", type=int, default=1)
     ap.add_argument("--seed", type=int)
     ap.add_argument("--steps", type=int, help="render (flow) steps; the port's default when omitted")
@@ -175,9 +193,11 @@ def main():
     seconds = max(10.0, min(270.0, a.seconds))       # LeVo 2 songs top out at 4:30
     lyrics = a.lyrics if a.lyrics is not None else a.lyrics_file.read_text(encoding="utf-8")
     levo_lyrics = to_levo_lyrics(lyrics, a.instrumental)
+    description = to_levo_description(a.style, a.instrumental)
     a.out_dir.mkdir(parents=True, exist_ok=True)
     (a.out_dir / "levo-lyrics.txt").write_text(levo_lyrics, encoding="utf-8")
     steps_total = int(seconds * 100 / 3 + 0.5)       # the port runs ~33.3 steps per second of music
+    log(f"[note] description: {description}")
     log(f"[note] LeVo 2 ({a.size}, {'full precision' if use_full else '8-bit'}) · {seconds:.0f}s · -> {steps_total} tokens")
     first = a.seed if a.seed is not None else random.randint(0, 999_999)
     takes = []
@@ -194,7 +214,7 @@ def main():
             if m:
                 log(f"[semantic] {m.group(1)} tokens, {m.group(3)} tok/s")
         cmd = [str(bin_dir / "levo-cli"), "--model", str(lm), "--lyrics", str(a.out_dir / "levo-lyrics.txt"),
-               "--prompt", a.style, "--duration", f"{seconds:.0f}", "--output", str(tokens),
+               "--prompt", description, "--duration", f"{seconds:.0f}", "--output", str(tokens),
                "--backend", "gpu", "--seed", str(seed), "--progress-interval", "2"]
         t0 = time.perf_counter()
         run(cmd, composing)
@@ -229,7 +249,7 @@ def main():
         "request": {"style": a.style, "lyrics": lyrics, "cot": "levo2", "cot_requested": "levo2",
                     "abc_supplied": False, "tempo": None, "instrumental": a.instrumental},
         "settings": {"cfg_scale": a.cfg, "steps": a.steps, "max_tokens": steps_total, "generator": f"levo2-{a.size}"},
-        "model": str(lm), "notes": [f"LeVo 2 lyrics: {levo_lyrics}"], "takes": takes,
+        "model": str(lm), "notes": [f"LeVo 2 lyrics: {levo_lyrics}", f"LeVo 2 description: {description}"], "takes": takes,
         "load_seconds": 0, "total_seconds": time.perf_counter() - t_start,
     }
     (a.out_dir / "song.json").write_text(json.dumps(record, indent=2), encoding="utf-8")

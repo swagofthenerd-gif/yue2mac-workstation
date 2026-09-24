@@ -503,7 +503,7 @@ def cmd_generate(a):
             abc_text = abc_tools.strip_chords(abc_text, keep_voice=a.keep_voice)
             notes.append("chords removed" + (f", kept only {a.keep_voice}" if a.keep_voice != "both" else ""))
         chk = check_score(abc_text)
-        if chk.get("ok") and chk.get("bpm") and "bpm" not in style.lower():
+        if chk.get("ok") and chk.get("bpm") and "bpm" not in style.lower() and not a.exact_style:
             # The official guidance: state the score's tempo in the style too.
             style = style.rstrip(", ") + f", {chk['bpm']} BPM"
             notes.append(f"added the score's tempo ({chk['bpm']} BPM) to the style")
@@ -676,6 +676,7 @@ def main():
     gen.add_argument("--strip-chords", action="store_true", help="remove chord symbols from the score")
     gen.add_argument("--keep-voice", default="both", choices=("both", "Vocal", "Ins"))
     gen.add_argument("--instrumental", action="store_true", help="no singing: silence the score's vocal line")
+    gen.add_argument("--exact-style", action="store_true", help="use the style text exactly as given (no added BPM)")
     gen.add_argument("--cfg-scale", type=float, help="text guidance; model default 1.0 (1.01 when planning is off)")
     gen.add_argument("--steps", type=int, help="refinement steps; model default 32")
     gen.add_argument("--max-tokens", type=int, help=f"song length cap, 25 per second, at most {HARD_TOKEN_CAP}")
