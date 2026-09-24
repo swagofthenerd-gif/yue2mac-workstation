@@ -27,12 +27,13 @@ extension Tools {
     static var separatorPython: String { AppPaths.baseDir.appendingPathComponent("Separator/venv/bin/python").path }
     static var separatorModels: String { AppPaths.baseDir.appendingPathComponent("Separator/models").path }
     static var separatorInstalled: Bool { FileManager.default.fileExists(atPath: separatorPython) }
-    static var sa3Python: String { AppPaths.baseDir.appendingPathComponent("StableAudio3/venv/bin/python").path }
+    /// Stability's official Apple-GPU (MLX) runtime inside the stable-audio-3 checkout.
+    static var sa3MLXDir: URL { AppPaths.baseDir.appendingPathComponent("StableAudio3/src/optimized/mlx") }
+    static var sa3Python: String { sa3MLXDir.appendingPathComponent(".venv/bin/python").path }
     static var sa3Installed: Bool { FileManager.default.fileExists(atPath: sa3Python) }
-    /// Weights are gated; this only says whether a download has happened (HF cache has the repo).
+    /// Weights are gated; this says whether the Medium download has happened.
     static var sa3WeightsPresent: Bool {
-        let hub = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cache/huggingface/hub")
-        return FileManager.default.fileExists(atPath: hub.appendingPathComponent("models--stabilityai--stable-audio-3-small-music").path)
+        FileManager.default.fileExists(atPath: sa3MLXDir.appendingPathComponent("models/mlx/dit_medium_f16.npz").path)
     }
 }
 
@@ -85,9 +86,11 @@ final class StemSession: ObservableObject {
     @Published var bandModel = "htdemucs_ft.yaml"
     // Stable Audio 3 options
     @Published var prompt = ""
-    @Published var strength = 0.6
+    /// Measured on a full song: ≤ 0.55 keeps the original timing (fits the original vocals).
+    @Published var strength = 0.5
+    static let timingLockedStrength = 0.55
     @Published var bpm: Double = 0
-    @Published var sa3Model = "small-music"
+    @Published var sa3Model = "medium"
     // Region / layer
     @Published var regionTrack = ""
     @Published var regionStart: Double = 0
@@ -234,7 +237,8 @@ final class StemSession: ObservableObject {
         let out = folder.appendingPathComponent("restyled/layer-\(n).wav")
         var p = layerPrompt
         if bpm > 0 && !p.lowercased().contains("bpm") { p += ", \(Int(bpm)) BPM" }
-        let (file, err) = await remix(["create", "--prompt", p, "--seconds", String(format: "%.2f", min(songSeconds, 110)),
+        let maxSeconds = sa3Model == "medium" ? 370.0 : 110.0
+        let (file, err) = await remix(["create", "--prompt", p, "--seconds", String(format: "%.2f", min(songSeconds, maxSeconds)),
                                        "--out", raw.path], label: "Creating layer \(n)")
         busy = nil
         if let err { message = err; return }
@@ -248,7 +252,9 @@ final class StemSession: ObservableObject {
         let name = "layer \(n)"
         tracks.append(StemTrack(name: name, versions: [url], labels: ["Created — \(layerPrompt.prefix(24))"]))
         mixer.set(name, url: url)
-        if songSeconds > 110 { message = "Stable Audio 3 Small makes up to 2 minutes; the layer covers the start and is silent after." }
+        if songSeconds > maxSeconds {
+            message = "This model makes up to \(Int(maxSeconds / 60)) min in one go; the layer covers the start and is silent after."
+        }
     }
 
     // MARK: Mix controls

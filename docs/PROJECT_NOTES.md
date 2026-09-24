@@ -132,8 +132,16 @@ mute/solo, version per stem) → export mix (ffmpeg amix normalize=0) or DAW ste
 
 - audio-separator peak-normalises by default → stems didn't sum to the song (12 dB). `stems.py`
   runs un-normalised and least-squares re-fits gains: 81 dB / 28 dB reconstruction, bleed −73 dB.
-- Stable Audio 3 code auto-selects MPS and falls back from flash-attn, so Medium may run on Mac —
-  **untested: weights are gated** (needs the user's HF login + accepting SA3 and Gemma terms).
+- **Remix runs on Stability's official MLX (Apple GPU) runtime** (`stable-audio-3/optimized/mlx`, weights
+  in the gated `stabilityai/stable-audio-3-optimized`, which also ships T5Gemma converted — no separate
+  Google acceptance needed). Medium on the M2 Ultra: a 3:37 stem restyled in ~14 s (15× real time,
+  9.6 GB peak); 10 s created in 3.3 s. Region 15 s, extend 16 s, create 30 s in 3 s.
+- **Strength cliff, measured on the full song** (onset-envelope correlation per 20 s window vs the original
+  instrumental; unrelated song = 0.07): 0.5 → 0.77–0.81, 0 ms drift · 0.55 → 0.56–0.74, ≤12 ms ·
+  0.6 → 0.28–0.34, up to 244 ms · 0.7 → 0.04–0.06. So ≤0.55 keeps the original vocals in sync; the UI
+  defaults to 0.5 and warns above 0.55.
+- Region regenerate: the model re-encodes the whole window (untouched parts came back 16–21 dB off), so
+  `remix.py` splices only the region into the original with 60 ms crossfades — outside is bit-identical.
 - Artist names are unlikely to steer SA3 (trained on licensed data); the UI says to describe the sound.
 
 ## Other ideas not built yet

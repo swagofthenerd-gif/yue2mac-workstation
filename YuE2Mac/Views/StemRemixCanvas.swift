@@ -142,8 +142,8 @@ struct StemRemixCanvas: View {
                 Text("Restyle the ticked stems").font(.system(.callout, weight: .semibold))
                 Spacer()
                 Picker("", selection: $session.sa3Model) {
-                    Text("Stable Audio 3 Small").tag("small-music")
-                    Text("Stable Audio 3 Medium (experimental on Mac)").tag("medium")
+                    Text("Stable Audio 3 Medium — best (whole song in one pass)").tag("medium")
+                    Text("Stable Audio 3 Small — lighter").tag("small-music")
                 }
                 .labelsHidden().fixedSize()
             }
@@ -153,7 +153,7 @@ struct StemRemixCanvas: View {
                 Text("Strength").foregroundStyle(.secondary)
                 Slider(value: $session.strength, in: 0.2...1.0, step: 0.05).frame(maxWidth: 180)
                 Text(String(format: "%.2f", session.strength)).font(.system(size: 11, design: .monospaced))
-                HelpButton(text: "How far from the original. 0.4–0.6 keeps the timing and notes so it stays locked to the song; 0.8+ reinvents more and can drift off the beat. Artist names rarely work — describe the sound instead.")
+                HelpButton(text: "How far from the original. Measured on a full song: up to 0.55 the restyle stays locked to the original timing (so it still fits the original vocals); from 0.6 the rhythm is re-invented and drifts. Artist names rarely work — describe the sound instead.")
                 Spacer()
                 Text("BPM").foregroundStyle(.secondary)
                 TextField("", value: $session.bpm, format: .number).frame(width: 52).textFieldStyle(.roundedBorder)
@@ -161,6 +161,11 @@ struct StemRemixCanvas: View {
                 Button { Task { await session.restyleTicked() } } label: { Label("Restyle", systemImage: "wand.and.rays") }
                     .buttonStyle(.borderedProminent).tint(theme.accentColor)
                     .disabled(session.busy != nil || !Tools.sa3Installed)
+            }
+            if session.strength > StemSession.timingLockedStrength {
+                Label("Above 0.55 the new part no longer follows the song's timing — it won't line up with the other stems or the original vocals.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange)
             }
             if !Tools.sa3Installed || !Tools.sa3WeightsPresent {
                 Text("Needs Stable Audio 3: Settings → Remix (Stable Audio 3). Its download needs a free Hugging Face login.")

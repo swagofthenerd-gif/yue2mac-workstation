@@ -109,9 +109,29 @@ enum SelfTest {
                 r["mix_readable"] = probe.status == 0
             }
             if let dir = st.exportStems() { r["daw_stems"] = (try? FileManager.default.contentsOfDirectory(atPath: dir.path).sorted()) ?? [] }
-            st.prompt = "glitchy granular IDM textures"
+            if let v = st.tracks.first?.name { st.toggleMute(v) }   // vocals back on for the full mix
+            st.prompt = "glitchy granular IDM textures, stuttering edits"
+            var t1 = Date()
             await st.restyleTicked()
             r["restyle_message"] = st.message ?? ""
+            r["restyle_seconds"] = Int(Date().timeIntervalSince(t1))
+            r["other_versions"] = st.tracks.first(where: { $0.name == "other" })?.labels ?? []
+            st.regionTrack = "drums"; st.regionStart = 10; st.regionEnd = 16; st.regionPrompt = "explosive breakbeat fill"
+            t1 = Date()
+            await st.regenerateRegion()
+            r["region_seconds"] = Int(Date().timeIntervalSince(t1))
+            r["drums_versions"] = st.tracks.first(where: { $0.name == "drums" })?.labels ?? []
+            st.layerPrompt = "warm analog pad, slow swells"
+            t1 = Date()
+            await st.addLayer()
+            r["layer_seconds"] = Int(Date().timeIntervalSince(t1))
+            r["tracks_after"] = st.tracks.map(\.name)
+            r["final_message"] = st.message ?? ""
+            if let mix = await st.exportMix() {
+                let probe = await runCapture(Tools.ffmpeg ?? "ffmpeg", ["-v", "error", "-i", mix.path, "-f", "null", "-"])
+                r["final_mix_readable"] = probe.status == 0
+                r["final_mix"] = mix.path
+            }
             results["stems"] = r
             suite.removePersistentDomain(forName: "yue2mac.selftest")
             return finish(report, results)

@@ -85,7 +85,7 @@ struct SettingsSheet: View {
                                detail: "Second song generator. About 6.5 GB, builds on this Mac (a few minutes). Research / education use only.",
                                installer: levoInstall) { Task { await levoInstall.run("setup_levo2.sh") } }
                     installRow("Remix (Stable Audio 3)", ok: Tools.sa3Installed && Tools.sa3WeightsPresent,
-                               detail: "Restyle stems, regenerate parts, add layers. On huggingface.co accept the licenses for stabilityai/stable-audio-3-small-music and google/t5gemma-b-b-ul2, then paste a read token here.",
+                               detail: "Restyle stems, regenerate parts, add layers — Stability's Apple-GPU (MLX) build, Medium model. On huggingface.co accept stabilityai/stable-audio-3-optimized, then paste a read token here (or log in with `hf auth login`).",
                                installer: sa3Install) {
                         Task { await sa3Install.run("setup_stable_audio3.sh", env: hfToken.isEmpty ? [:] : ["HF_LOGIN_TOKEN": hfToken]) }
                     }
