@@ -144,6 +144,41 @@ mute/solo, version per stem) → export mix (ffmpeg amix normalize=0) or DAW ste
   `remix.py` splices only the region into the original with 60 ms crossfades — outside is bit-identical.
 - Artist names are unlikely to steer SA3 (trained on licensed data); the UI says to describe the sound.
 
+## Bake-off, 2026-09-24: ACE-Step 1.5 XL, HeartMuLa 3B, YuE2, LeVo 2
+
+Installed (App Support/YuE2Mac/): ACE-Step 1.5 (`ACEStep/src`, uv; XL SFT + XL Base + LM 1.7B, ~47 GB,
+MIT) driven by `engine/acestep_run.py`; HeartMuLa via the community MLX port (`HeartMuLa/src`,
+happy-new-year 3B + HeartCodec-20260123 converted, tokenizer from HeartMuLa/HeartMuLaGen, Apache 2.0).
+Scoring: `engine/bakeoff_eval.sh`. Listening folder: `Output/_tests/bakeoff/LISTEN - bake-off`.
+
+**Covers of "Awais-Lahasil" (Urdu; ACE-Step cover = conditioned on the recording's own semantic codes,
+no transcription).** Whisper needs `--language ur`; on the original it catches 138/275 words (ceiling).
+
+| Version | melody kept | own timing | sound change | Urdu words heard |
+|---|---|---|---|---|
+| original | 91% | 1.00 | 0% | 138/275 |
+| ACE psy, strength 0.3 / 0.6 | 89% / 70% | new | 53–54% | 81 / 68 |
+| ACE rock 0.3 / 0.6 | 55% / 62% | new | 56% | 66 / 77 |
+| previous best SA3 per-stem | 88% | 0.76 | 25% | (real vocal) |
+| previous YuE2 cover | 63% | new | 63% | instrumental |
+
+ACE covers change the sound ~2× more than SA3 while carrying the melody, and sing the Urdu lyrics. They
+re-perform the timing (a true cover). One of 7 cover runs saved nothing silently; a rerun worked.
+
+**Keep my vocal, change the band (ACE XL Base `complete` with the vocal stem).** ACE re-sings the vocal
+(output vocal ≠ the recording), so: separate its new band, shift it by its steady offset, put the real
+vocal on top. Rock band: 56% different, offsets a constant ~50 ms → after shift every window at 0 ms
+(timing 0.56). Psychedelic band: 60% different, ~−160 ms → beats aligned after shift, groove new (0.24).
+
+**Songs from a prompt (same English lyrics, 90 s, two briefs).**
+
+| Engine | time for 90 s | words sung (of 64) | stereo | notes |
+|---|---|---|---|---|
+| ACE-Step XL SFT | 75 s | 40, 59 | yes | bright, normal loudness |
+| HeartMuLa 3B (MLX port) | 126–165 s | 56, 57 | **mono** | port writes mono |
+| YuE2 | ~96 s | 29, 29 | yes | |
+| LeVo 2 | ~415 s | 52, 17 | yes | peaks up to 2.5× full scale → fixed: `levo2_engine.py` now levels float output to −1 dBFS |
+
 ## Other ideas not built yet
 
 - Re-decode a take with `YuE2-Vae-legacy` (needs an MLX port of that decoder).

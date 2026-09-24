@@ -107,6 +107,28 @@ signal.signal(signal.SIGTERM, _stop)
 signal.signal(signal.SIGINT, _stop)
 
 
+def normalize_peak(path: Path, peak_db: float = -1.0):
+    """levo-render writes 32-bit float WAV whose peaks can exceed full scale (measured up to 2.5×),
+    which clips on playback and export. Scale the whole file down to peak_db when it's hot."""
+    import numpy as np
+    data = bytearray(path.read_bytes())
+    i = data.find(b"fmt ")
+    fmt, bits = int.from_bytes(data[i + 8:i + 10], "little"), int.from_bytes(data[i + 22:i + 24], "little")
+    if fmt != 3 or bits != 32:
+        return None
+    j = data.find(b"data")
+    size = int.from_bytes(data[j + 4:j + 8], "little")
+    samples = np.frombuffer(data, dtype="<f4", count=size // 4, offset=j + 8).copy()
+    peak = float(np.abs(samples).max()) if samples.size else 0.0
+    target = 10 ** (peak_db / 20)
+    if peak <= target:
+        return peak
+    samples *= target / peak
+    data[j + 8:j + 8 + size] = samples.astype("<f4").tobytes()
+    path.write_bytes(bytes(data))
+    return peak
+
+
 def run(cmd, on_line):
     global CURRENT
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
@@ -190,6 +212,9 @@ def main():
         t0 = time.perf_counter()
         run(cmd, rendering)
         render_s = time.perf_counter() - t0
+        peak = normalize_peak(wav)
+        if peak and peak > 1:
+            log(f"[note] take {i + 1} peaked at {peak:.2f}× full scale; levelled to -1 dBFS")
         seconds_out = wav_seconds(wav) or seconds
         takes.append({"file": wav.name, "seed": seed, "seconds": seconds_out, "semantic_truncated": False,
                       "guidance": 1.0, "timings": {"compose": compose_s, "render": render_s}})
