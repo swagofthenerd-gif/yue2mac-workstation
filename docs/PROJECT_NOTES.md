@@ -184,3 +184,9 @@ vocal on top. Rock band: 56% different, offsets a constant ~50 ms → after shif
 - Re-decode a take with `YuE2-Vae-legacy` (needs an MLX port of that decoder).
 - A compare-takes view (A/B playback).
 - Lyric/phoneme alignment sidecars (official docs describe them; not a model input).
+
+## LeVo 2 used properly + vocal realism (2026-09-24/25)
+
+- **LeVo 2 inputs now match Tencent's generate.py** (engine/levo2_engine.py): hidden `[Musicality-very-high]` tag, lower-case comma tags, a full stop ending every English section, length cap 270 s (the model ends the song itself), and **10 render steps** (Tencent's code2sound). The port's default of 50 steps renders ~3.5 dB darker above 8 kHz on the same tokens, and was the main cause of the "muffled" sound. Reproducing three of Tencent's demo songs from their exact inputs: ours now match or beat the official recordings on brightness, and the user preferred ours.
+- **Vocal mix** (engine/vocal_mix.py): split vocal → studio chain → back on the band. The user found it better but "still AI". Never use a limiter on LeVo's hot output (it cost ~7 dB of punch); lower the level with plain gain.
+- **Voice swap** (engine/voice_swap.py, scripts/setup_seedvc.sh): Seed-VC zero-shot singing conversion to a 25 s sample of the user's Lahasil chorus. It keeps the words (62/73 vs 63/73) and stays in time (≤10 ms). ~14 min per song on the M2 Ultra (the vocoder runs on the CPU because of an MPS size limit). The user's verdict: better, but the performance stays AI because Seed-VC copies the source's pitch and timing. Next: a human-sung guide (keep-vocal workflow), other models' vocals as the source, or official LeVo with prompt audio on the CUDA box.
