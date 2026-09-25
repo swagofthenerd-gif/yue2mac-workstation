@@ -124,9 +124,10 @@ signal.signal(signal.SIGTERM, _stop)
 signal.signal(signal.SIGINT, _stop)
 
 
-def normalize_peak(path: Path, peak_db: float = -1.0):
+def normalize_peak(path: Path, peak_db: float = -1.0, gain: float | None = None):
     """levo-render writes 32-bit float WAV whose peaks can exceed full scale (measured up to 2.5×),
-    which clips on playback and export. Scale the whole file down to peak_db when it's hot."""
+    which clips on playback and export. Scale the whole file down to peak_db when it's hot, or by
+    exactly `gain` (so stems keep the song's balance). Returns the file's original peak."""
     import numpy as np
     data = bytearray(path.read_bytes())
     i = data.find(b"fmt ")
@@ -138,9 +139,10 @@ def normalize_peak(path: Path, peak_db: float = -1.0):
     samples = np.frombuffer(data, dtype="<f4", count=size // 4, offset=j + 8).copy()
     peak = float(np.abs(samples).max()) if samples.size else 0.0
     target = 10 ** (peak_db / 20)
-    if peak <= target:
+    factor = gain if gain is not None else (target / peak if peak > target else 1.0)
+    if factor == 1.0:
         return peak
-    samples *= target / peak
+    samples *= factor
     data[j + 8:j + 8 + size] = samples.astype("<f4").tobytes()
     path.write_bytes(bytes(data))
     return peak
@@ -180,6 +182,9 @@ def main():
                     help="render (flow) steps. 10 = Tencent's code2sound; the port's own default of 50 "
                          "renders audibly darker (-3.5 dB above 8 kHz on the same tokens)")
     ap.add_argument("--cfg", type=float, help="render guidance; the port's default when omitted")
+    ap.add_argument("--stems", action="store_true",
+                    help="also render the vocal and the band on their own, straight from the tokens (no "
+                         "separation): Tencent's gen_type vocal/bgm. Adds two renders per take")
     ap.add_argument("--out-dir", type=Path, required=True)
     a = ap.parse_args()
 
@@ -242,9 +247,30 @@ def main():
         peak = normalize_peak(wav)
         if peak and peak > 1:
             log(f"[note] take {i + 1} peaked at {peak:.2f}× full scale; levelled to -1 dBFS")
+        gain = 10 ** (-1 / 20) / peak if peak and peak > 10 ** (-1 / 20) else 1.0
+        stems = {}
+        if a.stems:
+            # Tencent's generate_audio: vocal-only = band stream set to its empty code 9670,
+            # band-only = vocal stream set to 3142. The renderer reads streams 1 (vocal), 2 (band).
+            import numpy as np
+            codes = np.load(tokens)
+            for kind, stream, empty in (("vocals", 2, 9670), ("band", 1, 3142)):
+                part = codes.copy()
+                part[stream, :] = empty
+                t_path = a.out_dir / f"{name}.{kind}.tokens.npy"
+                np.save(t_path, part)
+                sidecar = tokens.with_suffix("").with_suffix(".tokens.json")
+                if sidecar.exists():
+                    (a.out_dir / f"{name}.{kind}.tokens.json").write_text(sidecar.read_text())
+                s_wav = a.out_dir / f"{name}-{kind}.wav"
+                log(f"[note] rendering the {kind} on their own")
+                run([cmd[0], str(t_path), *cmd[2:cmd.index("--output") + 1], str(s_wav),
+                     *cmd[cmd.index("--output") + 2:]], rendering)
+                normalize_peak(s_wav, gain=gain)
+                stems[kind] = s_wav.name
         seconds_out = wav_seconds(wav) or seconds
         takes.append({"file": wav.name, "seed": seed, "seconds": seconds_out, "semantic_truncated": False,
-                      "guidance": 1.0, "timings": {"compose": compose_s, "render": render_s}})
+                      "guidance": 1.0, "stems": stems, "timings": {"compose": compose_s, "render": render_s}})
         log(f"[done] {wav} {seconds_out:.1f}s")
 
     record = {
